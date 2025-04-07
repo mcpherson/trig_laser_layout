@@ -1,0 +1,68 @@
+FLOW:
+Startup 
+? IR receiver measures ambient IR level and recommends lights off
+OLED prompts user input to begin calibration
+   User enters commands via dashboard first, then IR remote (eventual)
+Calibration begins
+   Normalization
+     closest point via ToF - store distance and angles
+   Orientation
+     get rotation angle via MPU6050
+     drive CORRECTED left/right from normal - store distance+angle of extremes
+     drive CORRECTED up from normal - store distance+angle of extremes
+       we now have the wall coordinates
+       Add down direction / floor detection LATER
+OLED prompts user input to select mode
+Chosen mode begins
+Visible laser displays dots top-left to bot-right
+
+
+
+QUESTIONS:
+Decrease FoV physically?
+Reduce ROI?
+
+
+
+NOTES:
+ToF uses 3V
+ROI (region of interest) size and position are programmable. The user chooses a custom FoV from 4x4 SPADs (minimum size) up to 16x16 SPADs (full FoV).
+VL53L1X API user manual (UM2356)
+Ranging is continuous, with a programmable delay between two ranging operations (called an intermeasurement period). The ranging duration (timing budget) is also programmable.
+The user can set distance thresholds (below, above, inside, or outside the user-defined thresholds). An interrupt is raised only when threshold conditions are met.
+A clear interrupt is mandatory to allow the next ranging data to be updated
+The VL53L1X has three distance modes (DM): short, medium, and long.
+Long distance mode allows the longest possible ranging distance of 4 m to be reached. However, this maximum ranging distance is impacted by ambient light.
+Timing Budget (TB) >=140 for long-range
+Darkness is ideal for measurement... "Dark = no IR light in the band 940 nm ±30 nm"
+VL53L1_GetCalibrationData() gets x/y SPAD center
+VL53L1_SetUserROI() 
+"reading filtered over a time. A Basic AVG or EXP filter over maybe 100ms. This way the polling speed of the sensor also comes into play."
+https://learn.adafruit.com/calibrating-sensors/two-point-calibration
+create the basic plots in the serial plotter.
+https://github.com/pololu/vl53l1x-st-api-arduino/blob/master/vl53l1x-st-api/vl53l1_api.c
+The time of flight principle works irregarding processor clock speed. It is usually a small capacitor, which is being charged between start and stop events, with all analog front end. Then the capacitor voltage is being measured some way (slow).
+https://github.com/sparkfun/SparkFun_VL53L1X_Arduino_Library/blob/master/src/SparkFun_VL53L1X.h
+   void startTemperatureUpdate();
+COVER GLASS https://www.youtube.com/watch?v=BHM2CZVXZGc
+https://www.gilisymo.com/14-cover-glass-vl53l1x
+DEBUGGER / COMPILER: https://www.youtube.com/watch?v=7yhW7jzaWuY (requires Nucleo board?)
+vl53l1_ll_def.h ln 409 = data structure for ROI
+ALTERNATIVE TO SPAD ROI: VL53L1X_GetSignalPerSpad
+OFFSET: VL53L1X_GetOffset
+VL53L1X_GetROI_XY
+VL53L1X_GetROICenter
+VL53L1X_GetInterMeasurementInMs
+gnuPlot software
+linux program to convert datapoints to greyscale image
+use C to write data to file, then display ^
+   fopen, write, fclose...
+
+
+
+
+
+TO DO:
+add IR sensor looking for light in the band 940 nm ±30 nm
+Cover glass? Recalibration?
+Investigate decreasing FoV via ROI
