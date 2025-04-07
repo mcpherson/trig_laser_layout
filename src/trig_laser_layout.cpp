@@ -54,7 +54,7 @@ int16_t normalX[3], normalY[3];
 
 int status;
 
-const int numMeas = 20;
+const int numMeas = 10;
 int measCount = 0;
 int measurements[numMeas];
 
