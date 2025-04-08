@@ -4,7 +4,6 @@
  * Date: 1 APR 2025
  */
 
-
 #include "Particle.h"
 #include "math.h"
 #include "Stepper.h"
@@ -12,19 +11,10 @@
 #include "Adafruit_GFX.h"
 #include "Adafruit_VL53L1X.h"
 #include <Wire.h>
-// #include "vl53l1_api.h"
 
-// ======== Adafruit =========
 #define IRQ_PIN 2
 #define XSHUT_PIN 3
 Adafruit_VL53L1X vl53 = Adafruit_VL53L1X(XSHUT_PIN, IRQ_PIN);
-
-// ======== API ========
-// #define USE_BLOCKING_LOOP
-// #define MEASUREMENT_BUDGET_MS 50
-// #define INTER_MEASUREMENT_PERIOD_MS 60
-// VL53L1_Dev_t dev;
-// VL53L1_DEV Dev = &dev;
 
 SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
@@ -43,20 +33,33 @@ const int Y_ST_3 = D13;
 const int Y_ST_4 = D14;
 
 bool laserToggle, measureToggle;
+bool normalized, normalizedX, normalizedY;
+bool oriented, orientedX, orientedY;
 // Stepper
 int SPR = 2048; // steps per revolution
 float SPD = SPR / 360.0; // steps Per Degree
 int speed = 15; // RPM
 int stepsX, stepsY;
 // Calcs
-uint8_t lastTime; 
+uint32_t lastTime; 
 int16_t normalX[3], normalY[3]; 
 
 int status;
 
-const int numMeas = 10;
+const int numMeas = 5;
 int measCount = 0;
 int measurements[numMeas];
+int thisDistance;
+
+// MPU6050
+byte accel_x_h, accel_x_l, accel_y_h, accel_y_l, accel_z_h, accel_z_l;
+int16_t accel_x, accel_y, accel_z;
+float x_Gs, y_Gs, z_Gs;
+byte AFS_SEL_value;
+const int AFS_SEL_factor[4] = {16384, 8192, 4096, 2048};
+float pitch, roll;
+// USE ATAN2()
+// find pitch and roll angles with orient();
 
 enum Mode {
   FREE_GRID,
@@ -78,15 +81,16 @@ Stepper yStepper(SPR, Y_ST_1, Y_ST_3, Y_ST_2, Y_ST_4);
 void toggleLaser();
 int calcSteps();
 void showPoint(int16_t point[3]);
-void normalize();
+float getMeasurement();
+void getAccel();
+void getPitchAndRoll(float *x, float *y, float *z);
 void orient();
+void normalize();
 void setMode(Mode mode);
 void displayInstructions(Mode mode, uint8_t line);
 
 void stepTo(float xSteps, float ySteps);
 void stepperTest();
-
-void printRangingData();
 
 
 void setup() {
@@ -110,9 +114,16 @@ void setup() {
   // STEPPERS
   xStepper.setSpeed(speed);
   yStepper.setSpeed(speed);
+  
+  // MPU6050
+  Wire.begin();
+  Wire.beginTransmission(0x68);
+  Wire.write(0x6B);
+  Wire.write(0x00); 
+  Wire.endTransmission(true);
+  AFS_SEL_value = 0;
 
   // TIME OF FLIGHT SENSOR (TOFS)
-  // ======== Adafruit =========
   Wire.begin();
   if (! vl53.begin(0x29, &Wire)) {
     Serial.print(F("Error on init of VL sensor: "));
@@ -153,141 +164,26 @@ void setup() {
   vl.VL53L1X_SetInterruptPolarity(0);
   */
 
-  // ======== API ========
-  // uint8_t byteData = 0;
-  // uint16_t wordData = 0;
-
-  // Wire.begin();
-  // Wire.setClock(400000);
-
-  // Dev->I2cDevAddr = 0x52;
-  // // Dev->I2cDevAddr = 0x29; // address given by Adafruit...?
-
-  // VL53L1_software_reset(Dev);
-
-  // VL53L1_RdByte(Dev, 0x010F, &byteData);
-  // Serial.print(F("VL53L1X Model_ID: "));
-  // Serial.println(byteData, HEX);
-  // VL53L1_RdByte(Dev, 0x0110, &byteData);
-  // Serial.print(F("VL53L1X Module_Type: "));
-  // Serial.println(byteData, HEX);
-  // VL53L1_RdWord(Dev, 0x010F, &wordData);
-  // Serial.print(F("VL53L1X: "));
-  // Serial.println(wordData, HEX);
-
-  // Serial.println(F("Autonomous Ranging Test"));
-  // status = VL53L1_WaitDeviceBooted(Dev);
-  // if(!status) status = VL53L1_DataInit(Dev);
-  // if(!status) status = VL53L1_StaticInit(Dev);
-  // if(!status) status = VL53L1_SetDistanceMode(Dev, VL53L1_DISTANCEMODE_MEDIUM);
-  // if(!status) status = VL53L1_SetMeasurementTimingBudgetMicroSeconds(Dev, (uint32_t)MEASUREMENT_BUDGET_MS * 1000);
-  // if(!status) status = VL53L1_SetInterMeasurementPeriodMilliSeconds(Dev, INTER_MEASUREMENT_PERIOD_MS);
-  // if(!status) status = VL53L1_StartMeasurement(Dev);
-
-  // if(status)
-  // {
-  //   Serial.println(F("VL53L1_StartMeasurement failed"));
-  //   while(1);
-  // }
-  
-
-  // MPU6050?
-
   // TIMERS
   lastTime = millis();
 }
 
 void loop() {
-  // ======== Adafruit ========
-  int16_t distance;
-
-  // move
-  // dwell / measure 
 
 
 
-  if (vl53.dataReady()) {
-    // new measurement for the taking!
-    distance = vl53.distance();
-    if (distance == -1) {
-      // something went wrong!
-      Serial.print(F("Couldn't get distance: "));
-      Serial.println(vl53.vl_status);
-      return;
-    }
-    // Serial.print(F("Distance: "));
-    // Serial.print(distance);
-    // Serial.println(" mm");
-
-    measurements[measCount] = distance;
-    measCount++;
-    if (measCount == numMeas) {
-      int measSum;
-      float avgDist;
-      for (int i=0; i<numMeas; i++) {
-        measSum += measurements[i];
-      }
-      avgDist = (float)measSum / numMeas;
-      Serial.printf("SUM: %i, AVG: %0.0f\n", measSum, avgDist);
-      measCount = 0;
-    }
-
-    // data is read out, time for another reading!
-    vl53.clearInterrupt();
+  if (!oriented) {
+    getAccel();
+    getPitchAndRoll(&x_Gs, &y_Gs, &z_Gs);
+    orient();
   }
-
-
-  // ======== API ========
-  // #ifdef USE_BLOCKING_LOOP
-
-  //   // blocking wait for data ready
-  //   status = VL53L1_WaitMeasurementDataReady(Dev);
-
-  //   if(!status)
-  //   {
-  //     printRangingData();
-  //     VL53L1_ClearInterruptAndStartMeasurement(Dev);
-  //   }
-  //   else
-  //   {
-  //     Serial.print(F("Error waiting for data ready: "));
-  //     Serial.println(status);
-  //   }
-
-  // #else
-
-  //   static uint16_t startMs = millis();
-  //   uint8_t isReady;
-
-  //   // non-blocking check for data ready
-  //   status = VL53L1_GetMeasurementDataReady(Dev, &isReady);
-
-  //   if(!status)
-  //   {
-  //     if(isReady)
-  //     {
-  //       printRangingData();
-  //       VL53L1_ClearInterruptAndStartMeasurement(Dev);
-  //       startMs = millis();
-  //     }
-  //     else if((uint16_t)(millis() - startMs) > VL53L1_RANGE_COMPLETION_POLLING_TIMEOUT_MS)
-  //     {
-  //       Serial.print(F("Timeout waiting for data ready."));
-  //       VL53L1_ClearInterruptAndStartMeasurement(Dev);
-  //       startMs = millis();
-  //     }
-  //   }
-  //   else
-  //   {
-  //     Serial.print(F("Error getting data ready: "));
-  //     Serial.println(status);
-  //   }
-
-  //   // Optional polling delay; should be smaller than INTER_MEASUREMENT_PERIOD_MS,
-  //   // and MUST be smaller than VL53L1_RANGE_COMPLETION_POLLING_TIMEOUT_MS
-  //   delay(10);
-
-  // #endif
+  
+  if (!normalized) {
+    normalize();
+  }
+  
+  Serial.println(getMeasurement());
+  
 }
 
 void toggleLaser() {
@@ -305,14 +201,137 @@ void showPoint(int16_t point[3]) {
 
 }
 
-void normalize() {
-  // x+ steps to min
-  while (normalX == 0) {
-    xStepper.step(stepsX);
+float getMeasurement() {
+  float avgDist;
+  while (measCount < numMeas) {
+    int16_t distance;
+    if (vl53.dataReady()) {
+      distance = vl53.distance();
+      if (distance == -1) { // error
+        Serial.print(F("Couldn't get distance: "));
+        Serial.println(vl53.vl_status);
+        return -1;
+      }
+  
+      measurements[measCount] = distance;
+      measCount++;
+      if (measCount == numMeas) {
+        int measSum;
+        for (int i=0; i<numMeas; i++) {
+          measSum += measurements[i];
+        }
+        avgDist = (float)measSum / numMeas;
+        Serial.printf("SUM: %i, AVG: %0.0f\n", measSum, avgDist);
+      }
+      
+      vl53.clearInterrupt();
+    }
+  }
+  measCount = 0;
+  return avgDist;
+}
 
+void getAccel() {
+  Wire.beginTransmission(0x68);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  // get the values
+  Wire.requestFrom(0x68, 6, true);
+  // combine accel - shift h bits left by 8, then OR with the l bits to combine
+  accel_x = (Wire.read() << 8 | Wire.read());
+  accel_y = (Wire.read() << 8 | Wire.read());
+  accel_z = (Wire.read() << 8 | Wire.read());
+  // calculate Gs with accel values and the AFS_SEL factor
+  x_Gs = (float)accel_x / AFS_SEL_factor[AFS_SEL_value];
+  y_Gs = (float)accel_y / AFS_SEL_factor[AFS_SEL_value];
+  z_Gs = (float)accel_z / AFS_SEL_factor[AFS_SEL_value];
+}
+
+void getPitchAndRoll(float *x, float *y, float *z) {
+  // calculates pitch in degrees
+  // NaN is returned if pitch > 90 or pitch < -90
+  // this is intended behavior. 
+  pitch = -asin(*x) * (180.0/M_PI);
+  Serial.printf("PITCH: %0.2f\n", pitch);
+
+  // calculates roll in degrees
+  // flips from 180 to -180 halfway through roll
+  // this is ALSO intended behavior.
+  roll = atan2(*y, *z) * (180.0/M_PI);
+  Serial.printf("ROLL:  %0.2f\n", roll);
+}
+
+void orient() {
+
+}
+
+void normalize() {
+  float xCurr, yCurr, xLast, yLast, xCurrMin, yCurrMin;
+  int sweepSteps = 50;
+  int sweepDecr = 5;
+  bool stepsDirection = true;
+  // take first X measurement
+  xCurr = getMeasurement();
+  // start X normalization sweeps
+  while (!normalizedX) {
+    xStepper.step(sweepSteps);
+    xLast = xCurr;
+    xCurr = getMeasurement();
+    if (xCurr > xLast) {
+      xCurrMin = xLast;
+      // reverse direction and decrease step increment
+      if (stepsDirection) {
+        stepsDirection = false;
+        sweepSteps -= ((2 * sweepSteps) + sweepDecr);
+      }
+      else {
+        stepsDirection = true;
+        sweepSteps += ((2 * sweepSteps) - sweepDecr);
+      }
+      // check for 0 steps increment (normalizeX finished)
+      if (sweepSteps == 0) {
+        normalX = xCurrMin;
+        normalizedX = true;
+      }
+    }
+    else {
+      xCurrMin = xCurr;
+    }
+  }
+
+  // reset vars for Y normalization
+  sweepSteps = 50;
+  stepsDirection = true;
+  // take first Y measurement
+  yCurr = getMeasurement();
+  // start Y normalization sweeps
+  while (!normalizedY) {
+    yStepper.step(sweepSteps);
+    yLast = yCurr;
+    yCurr = getMeasurement();
+    if (yCurr > yLast) {
+      yCurrMin = yLast;
+      // reverse direction and decrease step increment
+      if (stepsDirection) {
+        stepsDirection = false;
+        sweepSteps -= ((2 * sweepSteps) + sweepDecr);
+      }
+      else {
+        stepsDirection = true;
+        sweepSteps += ((2 * sweepSteps) - sweepDecr);
+      }
+      // check for 0 steps increment (normalizeX finished)
+      if (sweepSteps == 0) {
+        normalY = yCurrMin;
+        normalizedY = true;
+      }
+    }
+    else {
+      yCurrMin = yCurr;
+    }
   }
 }
-void orient();
+
 void setMode(Mode mode);
 void displayInstructions(Mode mode, uint8_t line);
 
@@ -343,8 +362,8 @@ void stepTo(float xDeg, float yDeg) {
   if (xSteps >= 0) { xDir = 1; }
   else            { xDir = -1; }
   // yStepper's polarity is reversed for some reason...
-  if (ySteps >= 0) { yDir = 1; }
-  else            { yDir = -1; }
+  if (ySteps >= 0) { yDir = -1; }
+  else            { yDir = 1; }
 
   if (xStepsAbs > yStepsAbs || xStepsAbs == yStepsAbs) {
     max = xStepsAbs;
@@ -365,20 +384,3 @@ void stepTo(float xDeg, float yDeg) {
   }
 
 }
-
-// void printRangingData()
-// {
-//   static VL53L1_RangingMeasurementData_t RangingData;
-
-//   status = VL53L1_GetRangingMeasurementData(Dev, &RangingData);
-//   if(!status)
-//   {
-//     Serial.print(RangingData.RangeStatus);
-//     Serial.print(F(","));
-//     Serial.print(RangingData.RangeMilliMeter);
-//     Serial.print(F(","));
-//     Serial.print(RangingData.SignalRateRtnMegaCps/65536.0);
-//     Serial.print(F(","));
-//     Serial.println(RangingData.AmbientRateRtnMegaCps/65336.0);
-//   }
-// }
