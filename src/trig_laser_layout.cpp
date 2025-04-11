@@ -13,9 +13,6 @@
 #include "Button.h"
 #include <Wire.h>
 
-#define IRQ_PIN 2
-#define XSHUT_PIN 3
-
 SYSTEM_MODE(MANUAL);
 SYSTEM_THREAD(ENABLED);
 SerialLogHandler logHandler(LOG_LEVEL_INFO);
@@ -23,6 +20,7 @@ SerialLogHandler logHandler(LOG_LEVEL_INFO);
 // PINS
 const int OLED_RESET=-1;
 const int LASERPIN = D19;
+const int BUTTONPIN = D3;
 const int JOYSTICK_BUTTON = D10; // also use as wakeup?
 const int JOYSTICK_X = A0;
 const int JOYSTICK_Y = A1;
@@ -36,10 +34,14 @@ const int Y_ST_1 = D7;
 const int Y_ST_2 = D6;
 const int Y_ST_3 = D5;
 const int Y_ST_4 = D4;
+// TOF
+const int IRQ_PIN = D13;
+const int XSHUT_PIN = D14;
 
 // STATES
 bool laserToggle, measureToggle;
 bool isDriving;
+bool TLdefined, BRdefined;
 bool normalized, normalizedX, normalizedY;
 bool oriented, orientedX, orientedY;
 
@@ -78,6 +80,7 @@ uint16_t sense[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity threshol
 uint32_t lastTime; 
 
 enum Mode {
+  DEFAULT_MODE,
   MANUAL_DRIVE,
   FREE_GRID,
   CENTERED_GRID,
@@ -90,7 +93,7 @@ enum Mode {
 // DEVICES
 Adafruit_VL53L1X vl53 = Adafruit_VL53L1X(XSHUT_PIN, IRQ_PIN);
 Adafruit_SSD1306 display(OLED_RESET);
-Button joystickButton(JOYSTICK_BUTTON);
+// Button nextButton(BUTTONPIN);
 // xStepper rotates around Z, yStepper rotates around X
 Stepper xStepper(SPR, X_ST_1, X_ST_3, X_ST_2, X_ST_4);
 Stepper yStepper(SPR, Y_ST_1, Y_ST_3, Y_ST_2, Y_ST_4);
@@ -197,6 +200,7 @@ void setup() {
 
 void loop() {
 
+  // if (nextButton.isClicked()) { Serial.println("ayy"); }
   // stepTo(-10.0, 10.0);
   // delay(50000);        
   
@@ -206,6 +210,15 @@ void loop() {
     xStepper.setSpeed(speed);
     yStepper.setSpeed(speed);
   }
+
+  if (TLdefined) {
+    Serial.printf("TLdist: %i, TLX: %i, TLY: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
+  }
+
+  if (BRdefined) {
+    Serial.printf("BRdist: %i, BRX: %i, BRY: %i\n", BRdistance, BRsteps[0], BRsteps[1]);
+  }
+  
   
 
   // if (!oriented) {
@@ -380,96 +393,35 @@ void beginManualDrive() { isDriving = true; }
 
 void manualDrive() {
   detachInterrupt(JOYSTICK_BUTTON);
+  Button nextButton(JOYSTICK_BUTTON, true);
+  
   Serial.printf("I drive.\n");
   displayInstructions(MANUAL_DRIVE, 0);
+  delay(100);
 
   // decrease stepper speed for increased accuracy
   xStepper.setSpeed(2);
   yStepper.setSpeed(2);
 
-  // track when x or y steps are taken to skip subsequent sensitivity checks
-  bool xStepped, yStepped = false;
-
   // using this button is dependent on it being available if the same pin's interrupt triggered this function.
-  while (!joystickButton.isClicked()) {
-
-    drive();
-  // while (true) {
-    int xStick = analogRead(JOYSTICK_X);
-    int yStick = analogRead(JOYSTICK_Y);
-
-    // DEBUG
-    // Serial.printf("X: %i, Y: %i\n", xStick, yStick);
-    // delay(200);
-
-    // confine x/y movement to the correct sensitivity range
-    xStepped = false;
-    yStepped = false;
-    // determine direction and magnitude
-    float xMag = 0.0; 
-    float yMag = 0.0;
-    // X
-    if (xStick > sense[5]) {              // +X max 
-      xMag = 3.0;
-      xStepped = true;
-    }
-    if (xStick > sense[4] && !xStepped) { // +X mid
-      xMag = 2.0;
-      xStepped = true;
-    }
-    if (xStick > sense[3] && !xStepped) { // +X min
-      xMag = 1.0;
-    }
-    if (xStick < sense[0]) {              // -X max
-      xMag = -3.0;
-      xStepped = true;
-    }
-    if (xStick < sense[1] && !xStepped) { // -X mid
-      xMag = -2.0;
-      xStepped = true;
-    }
-    if (xStick < sense[2] && !xStepped) { // -X min
-      xMag = -1.0;
-    }
-    // Y 
-    if (yStick > sense[5]) {              // +Y max 
-      yMag = 3.0;
-      yStepped = true;
-    }
-    if (yStick > sense[4] && !yStepped) { // +Y mid
-      yMag = 2.0;
-      yStepped = true;
-    }
-    if (yStick > sense[3] && !yStepped) { // +Y min
-      yMag = 1.0;
-    }
-    if (yStick < sense[0]) {              // -Y max
-      yMag = -3.0;
-      yStepped = true;
-    }
-    if (yStick < sense[1] && !yStepped) { // -Y mid
-      yMag = -2.0;
-      xStepped = true;
-    }
-    if (yStick < sense[2] && !yStepped) { // -Y min
-      yMag = -1.0;
-    }
-
-    // Drive
-    if (xMag != 0.0 || yMag != 0.0) {
-      stepTo(xMag, yMag, true);
-    }
-  
-  }
+  while (!nextButton.isClicked()) { drive(); }
   
   // short delay to stabilize before measuring top left corner distance and getting total steps for angle calcs
   delay(200);
   TLdistance = getMeasurement();
   TLsteps[0] = totalStepsX;
   TLsteps[1] = totalStepsY;
+  displayInstructions(MANUAL_DRIVE, 1);
 
+  while (!nextButton.isClicked()) { drive(); }
+
+  delay(200);
+  BRdistance = getMeasurement();
+  BRsteps[0] = totalStepsX;
+  BRsteps[1] = totalStepsY;
 
   isDriving = false;
+  displayInstructions(DEFAULT_MODE, 0);
   attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
 }
 
@@ -548,14 +500,24 @@ void setMode(Mode mode);
 
 void displayInstructions(Mode mode, uint8_t line) {
   display.clearDisplay();
+  display.setCursor(0,0);
   switch (mode) {
+    case DEFAULT_MODE:
+      switch (line) {
+        case 0:
+          display.printf("Click stick to begin.\n");
+          break;
+        default:
+          break;
+      }
+      break;
     case MANUAL_DRIVE:
       switch (line) {
         case 0:
-          display.printf("MANUAL MODE:\nDrive to the\ntop left corner.\nClick to continue.");
+          display.printf("MANUAL MODE:\nDrive to the exact\ntop left corner.\nClick to continue.");
           break;
         case 1: 
-          display.printf("MANUAL MODE:\nDrive to the\nbottom right corner.\nClick to finish.");
+          display.printf("MANUAL MODE:\nDrive to the exact\nbottom right corner.\nClick to finish.");
           break;
         default:
           display.printf("MANUAL MODE:\nERROR");
