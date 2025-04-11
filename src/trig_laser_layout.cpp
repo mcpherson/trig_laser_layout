@@ -10,42 +10,54 @@
 #include "Adafruit_SSD1306.h"
 #include "Adafruit_GFX.h"
 #include "Adafruit_VL53L1X.h"
+#include "Button.h"
 #include <Wire.h>
 
 #define IRQ_PIN 2
 #define XSHUT_PIN 3
-Adafruit_VL53L1X vl53 = Adafruit_VL53L1X(XSHUT_PIN, IRQ_PIN);
 
 SYSTEM_MODE(MANUAL);
-// SYSTEM_THREAD(ENABLED);
+SYSTEM_THREAD(ENABLED);
+SerialLogHandler logHandler(LOG_LEVEL_INFO);
 
+// PINS
 const int OLED_RESET=-1;
 const int LASERPIN = D19;
+const int JOYSTICK_BUTTON = D10; // also use as wakeup?
+const int JOYSTICK_X = A0;
+const int JOYSTICK_Y = A1;
 // X Stepper
 const int X_ST_1 = D18;
 const int X_ST_2 = D17;
-const int X_ST_3 = D15; // also out of order on the Photon 2
+const int X_ST_3 = D15;
 const int X_ST_4 = D16;
 // Y Stepper
-const int Y_ST_1 = D11;
-const int Y_ST_2 = D12;
-const int Y_ST_3 = D13;
-const int Y_ST_4 = D14;
+const int Y_ST_1 = D7;
+const int Y_ST_2 = D6;
+const int Y_ST_3 = D5;
+const int Y_ST_4 = D4;
 
+// STATES
 bool laserToggle, measureToggle;
+bool isDriving;
 bool normalized, normalizedX, normalizedY;
 bool oriented, orientedX, orientedY;
-// Stepper
+
+// WALL DIMENSIONS
+// TL = top left, BR = bottom right
+int16_t TLsteps[2], TLdistance, BRsteps[2], BRdistance;
+float normalX, normalY; 
+
+
+// STEPPER
 int SPR = 2048; // steps per revolution
 float SPD = SPR / 360.0; // steps Per Degree
 int speed = 15; // RPM
-int stepsX, stepsY;
-// Calcs
-uint32_t lastTime; 
-int16_t normalX[3], normalY[3]; 
+int totalStepsX, totalStepsY;
+int stepperLimitX = 400; // ~70deg
+int stepperLimitY = 285; // ~50deg
 
-int status;
-
+// ToF
 const int numMeas = 5;
 int measCount = 0;
 int measurements[numMeas];
@@ -58,10 +70,15 @@ float x_Gs, y_Gs, z_Gs;
 byte AFS_SEL_value;
 const int AFS_SEL_factor[4] = {16384, 8192, 4096, 2048};
 float pitch, roll;
-// USE ATAN2()
-// find pitch and roll angles with orient();
+
+// CONTROLS
+uint16_t sense[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity thresholds 
+
+// TIMING
+uint32_t lastTime; 
 
 enum Mode {
+  MANUAL_DRIVE,
   FREE_GRID,
   CENTERED_GRID,
   STUDS,
@@ -70,13 +87,13 @@ enum Mode {
   ROOM_PROFILE
 };
 
-SerialLogHandler logHandler(LOG_LEVEL_INFO);
+// DEVICES
+Adafruit_VL53L1X vl53 = Adafruit_VL53L1X(XSHUT_PIN, IRQ_PIN);
 Adafruit_SSD1306 display(OLED_RESET);
+Button joystickButton(JOYSTICK_BUTTON);
 // xStepper rotates around Z, yStepper rotates around X
-// rotation angle, distance, and normal vector are all that's needed
 Stepper xStepper(SPR, X_ST_1, X_ST_3, X_ST_2, X_ST_4);
 Stepper yStepper(SPR, Y_ST_1, Y_ST_3, Y_ST_2, Y_ST_4);
-// Adafruit_VL53L1X distanceSensor = Adafruit_VL53L1X(XSHUT_PIN, IRQ_PIN);
 
 void toggleLaser();
 int calcSteps();
@@ -86,11 +103,12 @@ void getAccel();
 void getPitchAndRoll(float *x, float *y, float *z);
 void orient();
 void normalize();
+void beginManualDrive();
+void manualDrive();
+void drive();
 void setMode(Mode mode);
 void displayInstructions(Mode mode, uint8_t line);
-
-void stepTo(float xSteps, float ySteps);
-void stepperTest();
+void stepTo(float xSteps, float ySteps, bool stepwise);
 
 
 void setup() {
@@ -98,8 +116,12 @@ void setup() {
   Serial.begin(9600);
   waitFor(Serial.isConnected, 10000);
 
-  // PINS
+  // PINS / INTERRUPTS
   pinMode(LASERPIN, OUTPUT);
+  pinMode(JOYSTICK_X, INPUT);
+  pinMode(JOYSTICK_Y, INPUT);
+  pinMode(JOYSTICK_BUTTON, INPUT_PULLUP);
+  attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
 
   // OLED
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -166,23 +188,44 @@ void setup() {
 
   // TIMERS
   lastTime = millis();
+
+  // LASER
+  toggleLaser();
+
 }
+
 
 void loop() {
 
-
-
-  if (!oriented) {
-    getAccel();
-    getPitchAndRoll(&x_Gs, &y_Gs, &z_Gs);
-    orient();
+  // stepTo(-10.0, 10.0);
+  // delay(50000);        
+  
+  if (isDriving) {
+    manualDrive();
+    // reset stepper speed to max when finished
+    xStepper.setSpeed(speed);
+    yStepper.setSpeed(speed);
   }
   
-  if (!normalized) {
-    normalize();
-  }
+
+  // if (!oriented) {
+  //   getAccel();
+  //   getPitchAndRoll(&x_Gs, &y_Gs, &z_Gs);
+  //   stepTo(0.0, -15.0);
+  //   delay(3000);
+  //   getAccel();
+  //   getPitchAndRoll(&x_Gs, &y_Gs, &z_Gs);
+  //   stepTo(0.0, 15.0);
+  //   delay(3000);
+  //   orient();
+  // }
   
-  Serial.println(getMeasurement());
+  // if (!normalized) {
+  //   normalize();
+  // }
+  
+  // Serial.println(getMeasurement());
+
   
 }
 
@@ -262,6 +305,7 @@ void getPitchAndRoll(float *x, float *y, float *z) {
 }
 
 void orient() {
+  // COMPASS? HALL EFFECT?
 
 }
 
@@ -332,55 +376,248 @@ void normalize() {
   }
 }
 
-void setMode(Mode mode);
-void displayInstructions(Mode mode, uint8_t line);
+void beginManualDrive() { isDriving = true; }
 
-void stepperTest() {
+void manualDrive() {
+  detachInterrupt(JOYSTICK_BUTTON);
+  Serial.printf("I drive.\n");
+  displayInstructions(MANUAL_DRIVE, 0);
 
-  for (int i = 0; i < 180; i++) {
+  // decrease stepper speed for increased accuracy
+  xStepper.setSpeed(2);
+  yStepper.setSpeed(2);
 
-      xStepper.step(1);
-    
-      yStepper.step(-1);
+  // track when x or y steps are taken to skip subsequent sensitivity checks
+  bool xStepped, yStepped = false;
 
+  // using this button is dependent on it being available if the same pin's interrupt triggered this function.
+  while (!joystickButton.isClicked()) {
+
+    drive();
+  // while (true) {
+    int xStick = analogRead(JOYSTICK_X);
+    int yStick = analogRead(JOYSTICK_Y);
+
+    // DEBUG
+    // Serial.printf("X: %i, Y: %i\n", xStick, yStick);
+    // delay(200);
+
+    // confine x/y movement to the correct sensitivity range
+    xStepped = false;
+    yStepped = false;
+    // determine direction and magnitude
+    float xMag = 0.0; 
+    float yMag = 0.0;
+    // X
+    if (xStick > sense[5]) {              // +X max 
+      xMag = 3.0;
+      xStepped = true;
+    }
+    if (xStick > sense[4] && !xStepped) { // +X mid
+      xMag = 2.0;
+      xStepped = true;
+    }
+    if (xStick > sense[3] && !xStepped) { // +X min
+      xMag = 1.0;
+    }
+    if (xStick < sense[0]) {              // -X max
+      xMag = -3.0;
+      xStepped = true;
+    }
+    if (xStick < sense[1] && !xStepped) { // -X mid
+      xMag = -2.0;
+      xStepped = true;
+    }
+    if (xStick < sense[2] && !xStepped) { // -X min
+      xMag = -1.0;
+    }
+    // Y 
+    if (yStick > sense[5]) {              // +Y max 
+      yMag = 3.0;
+      yStepped = true;
+    }
+    if (yStick > sense[4] && !yStepped) { // +Y mid
+      yMag = 2.0;
+      yStepped = true;
+    }
+    if (yStick > sense[3] && !yStepped) { // +Y min
+      yMag = 1.0;
+    }
+    if (yStick < sense[0]) {              // -Y max
+      yMag = -3.0;
+      yStepped = true;
+    }
+    if (yStick < sense[1] && !yStepped) { // -Y mid
+      yMag = -2.0;
+      xStepped = true;
+    }
+    if (yStick < sense[2] && !yStepped) { // -Y min
+      yMag = -1.0;
+    }
+
+    // Drive
+    if (xMag != 0.0 || yMag != 0.0) {
+      stepTo(xMag, yMag, true);
+    }
+  
+  }
+  
+  // short delay to stabilize before measuring top left corner distance and getting total steps for angle calcs
+  delay(200);
+  TLdistance = getMeasurement();
+  TLsteps[0] = totalStepsX;
+  TLsteps[1] = totalStepsY;
+
+
+  isDriving = false;
+  attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
+}
+
+void drive() {
+
+  // track when x or y steps are taken to skip subsequent sensitivity checks
+  bool xStepped, yStepped = false;
+
+  int xStick = analogRead(JOYSTICK_X);
+  int yStick = analogRead(JOYSTICK_Y);
+
+  // DEBUG
+  // Serial.printf("X: %i, Y: %i\n", xStick, yStick);
+  // delay(200);
+
+  // confine x/y movement to the correct sensitivity range
+  xStepped = false;
+  yStepped = false;
+  // determine direction and magnitude
+  float xMag = 0.0; 
+  float yMag = 0.0;
+  // X
+  if (xStick > sense[5]) {              // +X max 
+    xMag = 3.0;
+    xStepped = true;
+  }
+  if (xStick > sense[4] && !xStepped) { // +X mid
+    xMag = 2.0;
+    xStepped = true;
+  }
+  if (xStick > sense[3] && !xStepped) { // +X min
+    xMag = 1.0;
+  }
+  if (xStick < sense[0]) {              // -X max
+    xMag = -3.0;
+    xStepped = true;
+  }
+  if (xStick < sense[1] && !xStepped) { // -X mid
+    xMag = -2.0;
+    xStepped = true;
+  }
+  if (xStick < sense[2] && !xStepped) { // -X min
+    xMag = -1.0;
+  }
+  // Y 
+  if (yStick > sense[5]) {              // +Y max 
+    yMag = 3.0;
+    yStepped = true;
+  }
+  if (yStick > sense[4] && !yStepped) { // +Y mid
+    yMag = 2.0;
+    yStepped = true;
+  }
+  if (yStick > sense[3] && !yStepped) { // +Y min
+    yMag = 1.0;
+  }
+  if (yStick < sense[0]) {              // -Y max
+    yMag = -3.0;
+    yStepped = true;
+  }
+  if (yStick < sense[1] && !yStepped) { // -Y mid
+    yMag = -2.0;
+    xStepped = true;
+  }
+  if (yStick < sense[2] && !yStepped) { // -Y min
+    yMag = -1.0;
+  }
+
+  // Drive
+  if (xMag != 0.0 || yMag != 0.0) {
+    stepTo(xMag, yMag, true); // stepwise
   }
 }
 
-void stepTo(float xDeg, float yDeg) {
-  // Store mantissa for rounding correction?
-  int xSteps = round(xDeg * SPD);
-  int ySteps = round(yDeg * SPD);
-  // TRACK TOTAL STEPS GLOBALLY
-  
+void setMode(Mode mode);
+
+void displayInstructions(Mode mode, uint8_t line) {
+  display.clearDisplay();
+  switch (mode) {
+    case MANUAL_DRIVE:
+      switch (line) {
+        case 0:
+          display.printf("MANUAL MODE:\nDrive to the\ntop left corner.\nClick to continue.");
+          break;
+        case 1: 
+          display.printf("MANUAL MODE:\nDrive to the\nbottom right corner.\nClick to finish.");
+          break;
+        default:
+          display.printf("MANUAL MODE:\nERROR");
+          break;
+      }
+      break;
+    case FREE_GRID:
+    default:
+      break;
+  }
+  display.display();
+}
+
+
+void stepTo(float xDeg, float yDeg, bool stepwise) {
+  int xSteps, ySteps;
+  if (!stepwise) { // convert degrees to steps
+    xSteps = round(xDeg * SPD);
+    ySteps = round(yDeg * SPD);
+  }
+  else {           // use degrees as steps
+    xSteps = (int)xDeg;
+    ySteps = (int)yDeg;
+  }
+
   int xStepsAbs = abs(xSteps);
   int yStepsAbs = abs(ySteps);
-  int max;
-  int currSteps = 0;
 
+  // Prevent movement outside predefined range (assuming I can roughly center the device on startup using MPU for pitch and compass or Hall sensor for yaw)
+  // if (abs(totalStepsX) + xStepsAbs >= stepperLimitX) {
+  //   Serial.printf("Attempted X overstep from %i to %i.\n", totalStepsX, totalStepsX + xSteps);
+  //   xSteps = 0;
+  // }
+  // if (abs(totalStepsY) + yStepsAbs >= stepperLimitY) {
+  //   Serial.printf("Attempted Y overstep from %i to %i.\n", totalStepsY, totalStepsY + ySteps);
+  //   ySteps = 0;
+  // }
+  
+  // find direction - positive angle = clockwise (looking at the motor shaft)
   int xDir;
   int yDir;
-  if (xSteps >= 0) { xDir = 1; }
-  else            { xDir = -1; }
-  // yStepper's polarity is reversed for some reason...
+  if (xSteps >= 0) { xDir = -1; }
+  else             { xDir = 1; }
   if (ySteps >= 0) { yDir = -1; }
-  else            { yDir = 1; }
+  else             { yDir = 1; }
+  
+  // find maximum to bound loop
+  int max;
+  (xStepsAbs > yStepsAbs || xStepsAbs == yStepsAbs) ? max = xStepsAbs : max = yStepsAbs;
+  
+  // track total steps globally
+  totalStepsX += xSteps;
+  totalStepsY += ySteps;
 
-  if (xStepsAbs > yStepsAbs || xStepsAbs == yStepsAbs) {
-    max = xStepsAbs;
-  }
-  else {
-    max = yStepsAbs;
-  }
-  Serial.printf("xSteps: %i, ySteps: %i, max: %i, xDir: %i, yDir: %i\n", xSteps, ySteps, max, xDir, yDir);
+  // step 1 degree at a time until both angles have been reached
   for (int i = 0; i < max; i++) {
-    if (currSteps < xStepsAbs) {
-      // round here instead to minimize error accum?
-      xStepper.step(xDir);
-    }
-    if (currSteps < yStepsAbs) {
-      yStepper.step(yDir);
-    }
-    currSteps++;
+    if (i < xStepsAbs) { xStepper.step(xDir); }
+    if (i < yStepsAbs) { yStepper.step(yDir); }
   }
-
+  
+  
+  // DEBUG
+  Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
+  // Serial.printf("xSteps: %i, ySteps: %i, max: %i, xDir: %i, yDir: %i\n", xSteps, ySteps, max, xDir, yDir);
 }

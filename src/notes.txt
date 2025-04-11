@@ -58,7 +58,7 @@ linux program to convert datapoints to greyscale image
 use C to write data to file, then display ^
    fopen, write, fclose...
 
-
+~16 steps of backlash. Determine direction to pull for correction and make sure that's the last direction that's moved in (stepwise) to maximize accuracy?
 
 
 
