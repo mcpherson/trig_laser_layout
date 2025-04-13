@@ -5,13 +5,13 @@
  */
 
 #include "Particle.h"
+#include <Wire.h>
 #include "math.h"
 #include "Stepper.h"
 #include "Adafruit_SSD1306.h"
 #include "Adafruit_GFX.h"
 #include "Adafruit_VL53L1X.h"
 #include "Button.h"
-#include <Wire.h>
 
 SYSTEM_MODE(MANUAL);
 SYSTEM_THREAD(ENABLED);
@@ -39,17 +39,30 @@ const int IRQ_PIN = D13;
 const int XSHUT_PIN = D14;
 
 // STATES
-bool laserToggle, measureToggle;
-bool isDriving;
-bool TLdefined, BRdefined;
-bool normalized, normalizedX, normalizedY;
-bool oriented, orientedX, orientedY;
+bool laserToggle = false;
+bool measureToggle = false;
+bool isDriving = false;
+bool normalized = false;
+bool TLdefined = false;
+bool TRdefined = false;
+bool BRdefined = false;
+bool oriented = false;
+bool orientedX = false;
+bool orientedY = false;
 
 // WALL DIMENSIONS
-// TL = top left, BR = bottom right
-int16_t TLsteps[2], TLdistance, BRsteps[2], BRdistance;
-float normalX, normalY; 
+// N = normal vector, TL/TR/BR = top left/top right/bottom right corners (defined via manualDrive())
+// typedef struct {
+//   int x,
+//   int y
+// } Steps;
 
+int16_t Ndistance;
+int16_t TLdistance, TRdistance, BRdistance;
+
+int16_t TLsteps[2];  
+int16_t TRsteps[2]; 
+int16_t BRsteps[2];
 
 // STEPPER
 int SPR = 2048; // steps per revolution
@@ -74,12 +87,14 @@ const int AFS_SEL_factor[4] = {16384, 8192, 4096, 2048};
 float pitch, roll;
 
 // CONTROLS
-uint16_t sense[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity thresholds 
+uint16_t sensi[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity thresholds 
 
 // TIMING
 uint32_t lastTime; 
 
+// MODES
 enum Mode {
+  NORMALIZE,
   DEFAULT_MODE,
   MANUAL_DRIVE,
   FREE_GRID,
@@ -100,8 +115,7 @@ Stepper yStepper(SPR, Y_ST_1, Y_ST_3, Y_ST_2, Y_ST_4);
 
 void toggleLaser();
 int calcSteps();
-void showPoint(int16_t point[3]);
-float getMeasurement();
+int getMeasurement();
 void getAccel();
 void getPitchAndRoll(float *x, float *y, float *z);
 void orient();
@@ -112,6 +126,8 @@ void drive();
 void setMode(Mode mode);
 void displayInstructions(Mode mode, uint8_t line);
 void stepTo(float xSteps, float ySteps, bool stepwise);
+void calculateWall();
+void showPoint();
 
 
 void setup() {
@@ -151,11 +167,11 @@ void setup() {
   // TIME OF FLIGHT SENSOR (TOFS)
   Wire.begin();
   if (! vl53.begin(0x29, &Wire)) {
-    Serial.print(F("Error on init of VL sensor: "));
+    Serial.print(F("Error initializing VL53L1X: "));
     Serial.println(vl53.vl_status);
     while (1)       delay(10);
   }
-  Serial.println(F("VL53L1X sensor OK!"));
+  Serial.println(F("VL53L1X initialized"));
 
   Serial.print(F("Sensor ID: 0x"));
   Serial.println(vl53.sensorID(), HEX);
@@ -167,7 +183,7 @@ void setup() {
   }
   Serial.println(F("Ranging started"));
 
-  // Valid timing budgets: 15, 20, 33, 50, 100, 200 and 500ms!
+  // Valid timing budgets: 15, 20, 33, 50, 100, 200 and 500ms
   vl53.setTimingBudget(50);
   Serial.print(F("Timing budget (ms): "));
   Serial.println(vl53.getTimingBudget());
@@ -198,18 +214,11 @@ void setup() {
 }
 
 
-void loop() {
-
-  // if (nextButton.isClicked()) { Serial.println("ayy"); }
-  // stepTo(-10.0, 10.0);
-  // delay(50000);        
+void loop() { 
   
-  if (isDriving) {
-    manualDrive();
-    // reset stepper speed to max when finished
-    xStepper.setSpeed(speed);
-    yStepper.setSpeed(speed);
-  }
+  if (isDriving) { manualDrive(); }
+
+  if (!normalized) { normalize(); } 
 
   if (TLdefined) {
     Serial.printf("TLdist: %i, TLX: %i, TLY: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
@@ -218,8 +227,6 @@ void loop() {
   if (BRdefined) {
     Serial.printf("BRdist: %i, BRX: %i, BRY: %i\n", BRdistance, BRsteps[0], BRsteps[1]);
   }
-  
-  
 
   // if (!oriented) {
   //   getAccel();
@@ -233,14 +240,12 @@ void loop() {
   //   orient();
   // }
   
-  // if (!normalized) {
-  //   normalize();
-  // }
   
   // Serial.println(getMeasurement());
 
   
 }
+
 
 void toggleLaser() {
   if (!laserToggle) {
@@ -253,12 +258,10 @@ void toggleLaser() {
   }
 }
 
-void showPoint(int16_t point[3]) {
 
-}
-
-float getMeasurement() {
+int getMeasurement() {
   float avgDist;
+  loopStart:
   while (measCount < numMeas) {
     int16_t distance;
     if (vl53.dataReady()) {
@@ -277,15 +280,18 @@ float getMeasurement() {
           measSum += measurements[i];
         }
         avgDist = (float)measSum / numMeas;
-        Serial.printf("SUM: %i, AVG: %0.0f\n", measSum, avgDist);
+        // DEBUG
+        // Serial.printf("SUM: %i, AVG: %0.0f\n", measSum, avgDist);
       }
       
       vl53.clearInterrupt();
     }
   }
   measCount = 0;
-  return avgDist;
+  if (avgDist > 10000) { goto loopStart; } // sensor sometimes spits out a huge value
+  return round(avgDist);
 }
+
 
 void getAccel() {
   Wire.beginTransmission(0x68);
@@ -303,132 +309,142 @@ void getAccel() {
   z_Gs = (float)accel_z / AFS_SEL_factor[AFS_SEL_value];
 }
 
+
 void getPitchAndRoll(float *x, float *y, float *z) {
   // calculates pitch in degrees
   // NaN is returned if pitch > 90 or pitch < -90
-  // this is intended behavior. 
   pitch = -asin(*x) * (180.0/M_PI);
   Serial.printf("PITCH: %0.2f\n", pitch);
 
   // calculates roll in degrees
   // flips from 180 to -180 halfway through roll
-  // this is ALSO intended behavior.
   roll = atan2(*y, *z) * (180.0/M_PI);
   Serial.printf("ROLL:  %0.2f\n", roll);
 }
 
+
 void orient() {
   // COMPASS? HALL EFFECT?
+  // not even necessary
 
 }
 
+
 void normalize() {
-  float xCurr, yCurr, xLast, yLast, xCurrMin, yCurrMin;
+  Serial.printf("NORMALIZING...\n");
+  display.printf("NORMALIZING...\n");
+  int xCurr, yCurr, xLast, yLast, xCurrMin, yCurrMin;
   int sweepSteps = 50;
-  int sweepDecr = 5;
-  bool stepsDirection = true;
-  // take first X measurement
+  int sweepDecr = 5; 
+
+  // X normalization
   xCurr = getMeasurement();
-  // start X normalization sweeps
-  while (!normalizedX) {
-    xStepper.step(sweepSteps);
+  Serial.printf("D: %i\n", xCurr);
+  delay(1000);
+  xCurr = getMeasurement();
+  Serial.printf("D: %i\n", xCurr);
+  delay(1000);
+  xCurr = getMeasurement();
+  Serial.printf("D: %i\n", xCurr);
+  delay(1000);
+  while (true) {}
+  while (sweepSteps != 0) {
+    Serial.printf("X - curr: %i, last: %i, min: %i, step: %i\n", xCurr, xLast, xCurrMin, sweepSteps);
+    stepTo((float)sweepSteps, 0.0, true);
+    delay(1000);
+
     xLast = xCurr;
     xCurr = getMeasurement();
     if (xCurr > xLast) {
       xCurrMin = xLast;
-      // reverse direction and decrease step increment
-      if (stepsDirection) {
-        stepsDirection = false;
-        sweepSteps -= ((2 * sweepSteps) + sweepDecr);
-      }
-      else {
-        stepsDirection = true;
-        sweepSteps += ((2 * sweepSteps) - sweepDecr);
-      }
-      // check for 0 steps increment (normalizeX finished)
-      if (sweepSteps == 0) {
-        normalX = xCurrMin;
-        normalizedX = true;
-      }
+      // reverse direction and decrease steps taken
+      sweepSteps = -sweepSteps;
+      sweepSteps > 0 ? sweepSteps -= sweepDecr : sweepSteps += sweepDecr;
     }
     else {
       xCurrMin = xCurr;
     }
   }
 
-  // reset vars for Y normalization
-  sweepSteps = 50;
-  stepsDirection = true;
-  // take first Y measurement
+  // Y normalization
+  sweepSteps = 50; // reset
   yCurr = getMeasurement();
-  // start Y normalization sweeps
-  while (!normalizedY) {
-    yStepper.step(sweepSteps);
+  delay(1000);
+  while (sweepSteps != 0) {
+    Serial.printf("Y - curr: %i, last: %i, min: %i, step: %i\n", yCurr, yLast, yCurrMin, sweepSteps);
+    stepTo(0.0, (float)sweepSteps, true);
+    delay(1000);
     yLast = yCurr;
     yCurr = getMeasurement();
     if (yCurr > yLast) {
       yCurrMin = yLast;
-      // reverse direction and decrease step increment
-      if (stepsDirection) {
-        stepsDirection = false;
-        sweepSteps -= ((2 * sweepSteps) + sweepDecr);
-      }
-      else {
-        stepsDirection = true;
-        sweepSteps += ((2 * sweepSteps) - sweepDecr);
-      }
-      // check for 0 steps increment (normalizeX finished)
-      if (sweepSteps == 0) {
-        normalY = yCurrMin;
-        normalizedY = true;
-      }
+      // reverse direction and decrease steps taken
+      sweepSteps = -sweepSteps;
+      sweepSteps > 0 ? sweepSteps += sweepDecr : sweepSteps -= sweepDecr;
     }
     else {
       yCurrMin = yCurr;
     }
   }
+  normalized = true;
+  // Zero out global steps taken as starting point for calcs
+  // backlash will matter here...maybe try to eliminate steps and base it on distance(?)
+  totalStepsX = 0;
+  totalStepsY = 0;
 }
 
-void beginManualDrive() { isDriving = true; }
 
+void beginManualDrive() { isDriving = true; } // interrupt
+
+// Allows the user to drive the gimbal. 
+// Easiest and most accurate way to find the true corners of a wall with budget parts.
 void manualDrive() {
+  Serial.printf("I drive.\n");
+  // change joystick click functionality
   detachInterrupt(JOYSTICK_BUTTON);
   Button nextButton(JOYSTICK_BUTTON, true);
   
-  Serial.printf("I drive.\n");
   displayInstructions(MANUAL_DRIVE, 0);
-  delay(100);
-
+  
   // decrease stepper speed for increased accuracy
   xStepper.setSpeed(2);
   yStepper.setSpeed(2);
-
-  // using this button is dependent on it being available if the same pin's interrupt triggered this function.
+  
+  delay(100); // needed to prevent button from triggering immediately(?)
   while (!nextButton.isClicked()) { drive(); }
   
-  // short delay to stabilize before measuring top left corner distance and getting total steps for angle calcs
-  delay(200);
+  delay(200); // stabilize
   TLdistance = getMeasurement();
   TLsteps[0] = totalStepsX;
   TLsteps[1] = totalStepsY;
+
   displayInstructions(MANUAL_DRIVE, 1);
 
   while (!nextButton.isClicked()) { drive(); }
 
-  delay(200);
+  delay(200); // stabilize
   BRdistance = getMeasurement();
   BRsteps[0] = totalStepsX;
   BRsteps[1] = totalStepsY;
 
-  isDriving = false;
   displayInstructions(DEFAULT_MODE, 0);
+
   attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
+
+  // reset stepper speed to max when finished
+  xStepper.setSpeed(speed);
+  yStepper.setSpeed(speed);
+
+  isDriving = false;
 }
 
+
+// joystick controls
 void drive() {
 
   // track when x or y steps are taken to skip subsequent sensitivity checks
-  bool xStepped, yStepped = false;
+  bool xStepped = false;
+  bool yStepped = false;
 
   int xStick = analogRead(JOYSTICK_X);
   int yStick = analogRead(JOYSTICK_Y);
@@ -437,56 +453,54 @@ void drive() {
   // Serial.printf("X: %i, Y: %i\n", xStick, yStick);
   // delay(200);
 
-  // confine x/y movement to the correct sensitivity range
-  xStepped = false;
-  yStepped = false;
   // determine direction and magnitude
   float xMag = 0.0; 
   float yMag = 0.0;
   // X
-  if (xStick > sense[5]) {              // +X max 
+  if (xStick > sensi[5]) {              // +X max 
     xMag = 3.0;
     xStepped = true;
   }
-  if (xStick > sense[4] && !xStepped) { // +X mid
+  if (xStick > sensi[4] && !xStepped) { // +X mid
     xMag = 2.0;
     xStepped = true;
   }
-  if (xStick > sense[3] && !xStepped) { // +X min
+  if (xStick > sensi[3] && !xStepped) { // +X min
     xMag = 1.0;
   }
-  if (xStick < sense[0]) {              // -X max
+  if (xStick < sensi[0]) {              // -X max
     xMag = -3.0;
     xStepped = true;
   }
-  if (xStick < sense[1] && !xStepped) { // -X mid
+  if (xStick < sensi[1] && !xStepped) { // -X mid
     xMag = -2.0;
     xStepped = true;
   }
-  if (xStick < sense[2] && !xStepped) { // -X min
+  if (xStick < sensi[2] && !xStepped) { // -X min
     xMag = -1.0;
   }
+
   // Y 
-  if (yStick > sense[5]) {              // +Y max 
+  if (yStick > sensi[5]) {              // +Y max 
     yMag = 3.0;
     yStepped = true;
   }
-  if (yStick > sense[4] && !yStepped) { // +Y mid
+  if (yStick > sensi[4] && !yStepped) { // +Y mid
     yMag = 2.0;
     yStepped = true;
   }
-  if (yStick > sense[3] && !yStepped) { // +Y min
+  if (yStick > sensi[3] && !yStepped) { // +Y min
     yMag = 1.0;
   }
-  if (yStick < sense[0]) {              // -Y max
+  if (yStick < sensi[0]) {              // -Y max
     yMag = -3.0;
     yStepped = true;
   }
-  if (yStick < sense[1] && !yStepped) { // -Y mid
+  if (yStick < sensi[1] && !yStepped) { // -Y mid
     yMag = -2.0;
     xStepped = true;
   }
-  if (yStick < sense[2] && !yStepped) { // -Y min
+  if (yStick < sensi[2] && !yStepped) { // -Y min
     yMag = -1.0;
   }
 
@@ -496,12 +510,26 @@ void drive() {
   }
 }
 
-void setMode(Mode mode);
+
+void setMode(Mode mode) {
+
+}
+
 
 void displayInstructions(Mode mode, uint8_t line) {
   display.clearDisplay();
   display.setCursor(0,0);
   switch (mode) {
+    case NORMALIZE:
+      switch (line) {
+        case 0:
+          display.printf("NORMALIZING...\n");
+          break;
+        default:
+          display.printf("NORMALIZING:\nERROR");
+          break;
+      }
+      break;
     case DEFAULT_MODE:
       switch (line) {
         case 0:
@@ -543,9 +571,6 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
     ySteps = (int)yDeg;
   }
 
-  int xStepsAbs = abs(xSteps);
-  int yStepsAbs = abs(ySteps);
-
   // Prevent movement outside predefined range (assuming I can roughly center the device on startup using MPU for pitch and compass or Hall sensor for yaw)
   // if (abs(totalStepsX) + xStepsAbs >= stepperLimitX) {
   //   Serial.printf("Attempted X overstep from %i to %i.\n", totalStepsX, totalStepsX + xSteps);
@@ -558,13 +583,15 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
   
   // find direction - positive angle = clockwise (looking at the motor shaft)
   int xDir;
-  int yDir;
   if (xSteps >= 0) { xDir = -1; }
   else             { xDir = 1; }
+  int yDir;
   if (ySteps >= 0) { yDir = -1; }
   else             { yDir = 1; }
   
   // find maximum to bound loop
+  int xStepsAbs = abs(xSteps);
+  int yStepsAbs = abs(ySteps);
   int max;
   (xStepsAbs > yStepsAbs || xStepsAbs == yStepsAbs) ? max = xStepsAbs : max = yStepsAbs;
   
@@ -578,8 +605,25 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
     if (i < yStepsAbs) { yStepper.step(yDir); }
   }
   
-  
   // DEBUG
-  Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
+  // Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
   // Serial.printf("xSteps: %i, ySteps: %i, max: %i, xDir: %i, yDir: %i\n", xSteps, ySteps, max, xDir, yDir);
+}
+
+
+void calculateWall() {
+  // calculate angles from normal vector to TL/BR.
+  float TLangle = acos(Ndistance / TLdistance) * (180/M_PI);
+  float BRangle = acos(Ndistance / BRdistance) * (180/M_PI);
+  // calculate distance from normal point to TL/BR
+  float NtoTL = sqrt(pow(TLdistance, 2) - pow(Ndistance, 2));
+  float NtoBR = sqrt(pow(BRdistance, 2) - pow(Ndistance, 2));
+  // calculate wall diagonal from known sides
+  float TLtoBR = hypot(NtoTL, NtoBR);
+
+}
+
+
+void showPoint() {
+
 }

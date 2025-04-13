@@ -60,7 +60,15 @@ use C to write data to file, then display ^
 
 ~16 steps of backlash. Determine direction to pull for correction and make sure that's the last direction that's moved in (stepwise) to maximize accuracy?
 
+3d file for joystick: https://www.thingiverse.com/chetjohnston/designs CREDIT!
 
+C++ compiler was useful (normalize increment weirdness)
+
+Attaching and detaching interrupts, local button
+
+valid use of delay()?
+
+where to use pointers?
 
 TO DO:
 add IR sensor looking for light in the band 940 nm ±30 nm
