@@ -120,8 +120,10 @@ void getAccel();
 void getPitchAndRoll(float *x, float *y, float *z);
 void orient();
 void normalize();
+void nNormalize();
+void newNormalize();
 void beginManualDrive();
-void manualDrive();
+void manualDrive(bool simpleMode);
 void drive();
 void setMode(Mode mode);
 void displayInstructions(Mode mode, uint8_t line);
@@ -195,8 +197,10 @@ void setup() {
   // Serial.println(vl53.VL53L1X_GetOffset());
   // Serial.print(F("ROI X/Y: "));
   // Serial.println(vl53.VL53L1X_GetROI_XY());
+  // uint16_t ROIC;
   // Serial.print(F("ROI Center: "));
-  // Serial.println(vl53.VL53L1X_GetROICenter());
+  vl53.VL53L1X_SetDistanceMode(1);
+  // Serial.println(ROIC);
   // Serial.print(F("Intermeasurement (ms): "));
   // Serial.println(vl53.VL53L1X_GetInterMeasurementInMs());
 
@@ -216,9 +220,12 @@ void setup() {
 
 void loop() { 
   
-  if (isDriving) { manualDrive(); }
+  if (isDriving) { manualDrive(false); }
 
-  if (!normalized) { normalize(); } 
+
+
+  if (!normalized) { newNormalize(); } 
+
 
   if (TLdefined) {
     Serial.printf("TLdist: %i, TLX: %i, TLY: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
@@ -329,6 +336,96 @@ void orient() {
 
 }
 
+void newNormalize() {
+  xStepper.setSpeed(2);
+  yStepper.setSpeed(2);
+  Serial.printf("NORMALIZING...\n");
+  int xCurr, yCurr, xLast, yLast;
+  float startSweepSteps = -100.0;
+  float sweepSteps = 15.0;
+  bool prevIncreased = false;
+
+  // X normalization
+  stepTo(startSweepSteps, 0.0, true);
+  delay(1000);
+  xLast = 10000;
+  getMeasurement();
+  getMeasurement();
+  while (true) {
+    stepTo(sweepSteps, 0.0, true);
+    delay(500);
+    xCurr = getMeasurement();
+    Serial.printf("X - CURR: %i,  LAST: %i,  ALREADY: %i\n", xCurr, xLast, prevIncreased);
+    if (xCurr >= xLast) {
+      if (prevIncreased) {
+        break;
+      }
+      else {
+        prevIncreased = true;
+      }
+    }
+    else {
+      prevIncreased = false;
+    }
+    xLast = xCurr;
+  }
+
+  prevIncreased = false;
+  // Y normalization
+  stepTo(0.0, startSweepSteps, true);
+  delay(1000);
+  yLast = 10000;
+
+  while (true) {
+    stepTo(0.0, sweepSteps, true);
+    delay(500);
+    yCurr = getMeasurement();
+    Serial.printf("Y - CURR: %i,  LAST: %i,  ALREADY: %i\n", yCurr, yLast, prevIncreased);
+    if (yCurr >= yLast) {
+      if (prevIncreased) {
+        break;
+      }
+      else {
+        prevIncreased = true;
+      }
+    }
+    else {
+      prevIncreased = false;
+    }
+    yLast = yCurr;
+  }
+
+  Ndistance = yLast;
+  normalized = true;
+  totalStepsX = 0;
+  totalStepsY = 0;
+  Serial.printf("NORMALIZED!\n");
+  xStepper.setSpeed(speed);
+  yStepper.setSpeed(speed);
+}
+
+void nNormalize() {
+  Serial.printf("NORMALIZING...\n");
+  int xCurr, yCurr, xLast, yLast, xCurrMin, yCurrMin;
+  int sweepSteps = 10;
+
+  // X normalization
+  xCurr = getMeasurement();
+  xLast = xCurr;
+  xCurrMin = 10000;
+  delay(1000);
+  stepTo(-200.0, 0.0, true);
+  delay(1000);
+  for (int i=0; i<20; i++) {
+    stepTo((float)sweepSteps, 0.0, true);
+    delay(1000);
+    
+    xCurr = getMeasurement();
+    Serial.printf("X - curr: %i\n", xCurr);
+    
+  }
+  normalized = true;
+}
 
 void normalize() {
   Serial.printf("NORMALIZING...\n");
@@ -339,22 +436,15 @@ void normalize() {
 
   // X normalization
   xCurr = getMeasurement();
-  Serial.printf("D: %i\n", xCurr);
+  xLast = xCurr;
+  xCurrMin = 10000;
   delay(1000);
-  xCurr = getMeasurement();
-  Serial.printf("D: %i\n", xCurr);
-  delay(1000);
-  xCurr = getMeasurement();
-  Serial.printf("D: %i\n", xCurr);
-  delay(1000);
-  while (true) {}
   while (sweepSteps != 0) {
-    Serial.printf("X - curr: %i, last: %i, min: %i, step: %i\n", xCurr, xLast, xCurrMin, sweepSteps);
     stepTo((float)sweepSteps, 0.0, true);
-    delay(1000);
-
-    xLast = xCurr;
+    delay(4000);
+    
     xCurr = getMeasurement();
+    Serial.printf("X - curr: %i, last: %i, min: %i, step: %i\n", xCurr, xLast, xCurrMin, sweepSteps);
     if (xCurr > xLast) {
       xCurrMin = xLast;
       // reverse direction and decrease steps taken
@@ -364,8 +454,9 @@ void normalize() {
     else {
       xCurrMin = xCurr;
     }
+    xLast = xCurr;
   }
-
+  delay(200000);
   // Y normalization
   sweepSteps = 50; // reset
   yCurr = getMeasurement();
@@ -398,7 +489,7 @@ void beginManualDrive() { isDriving = true; } // interrupt
 
 // Allows the user to drive the gimbal. 
 // Easiest and most accurate way to find the true corners of a wall with budget parts.
-void manualDrive() {
+void manualDrive(bool simpleMode) {
   Serial.printf("I drive.\n");
   // change joystick click functionality
   detachInterrupt(JOYSTICK_BUTTON);
@@ -606,7 +697,7 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
   }
   
   // DEBUG
-  // Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
+  Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
   // Serial.printf("xSteps: %i, ySteps: %i, max: %i, xDir: %i, yDir: %i\n", xSteps, ySteps, max, xDir, yDir);
 }
 
