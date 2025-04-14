@@ -43,26 +43,26 @@ bool laserToggle = false;
 bool measureToggle = false;
 bool isDriving = false;
 bool normalized = false;
+bool BLdefined = false;
 bool TLdefined = false;
 bool TRdefined = false;
-bool BRdefined = false;
 bool oriented = false;
 bool orientedX = false;
 bool orientedY = false;
 
 // WALL DIMENSIONS
-// N = normal vector, TL/TR/BR = top left/top right/bottom right corners (defined via manualDrive())
+// N = normal vector, BL/TL/TR = bottom left/top left/top right corners (defined via manualDrive())
 // typedef struct {
 //   int x,
 //   int y
 // } Steps;
 
 int16_t Ndistance;
-int16_t TLdistance, TRdistance, BRdistance;
+int16_t BLdistance, TLdistance, TRdistance;
 
+int16_t BLsteps[2];
 int16_t TLsteps[2];  
 int16_t TRsteps[2]; 
-int16_t BRsteps[2];
 
 // STEPPER
 int SPR = 2048; // steps per revolution
@@ -121,7 +121,7 @@ void getPitchAndRoll(float *x, float *y, float *z);
 void orient();
 void normalize();
 void nNormalize();
-void newNormalize();
+void normalize();
 void beginManualDrive();
 void manualDrive(bool simpleMode);
 void drive();
@@ -222,9 +222,7 @@ void loop() {
   
   if (isDriving) { manualDrive(false); }
 
-
-
-  if (!normalized) { newNormalize(); } 
+  if (!normalized) { normalize(); } 
 
 
   if (TLdefined) {
@@ -336,7 +334,7 @@ void orient() {
 
 }
 
-void newNormalize() {
+void normalize() {
   xStepper.setSpeed(2);
   yStepper.setSpeed(2);
   Serial.printf("NORMALIZING...\n");
@@ -350,27 +348,27 @@ void newNormalize() {
 
   // X normalization
   stepTo(startSweepSteps, 0.0, true);
-  delay(1000);
-  xLast = 10000;
-  getMeasurement();
+  delay(250);
+  xLast = 10000; // spoof impossible value to pass the IF
+  getMeasurement(); // VL53L1X often returns a junk value after waking up, so I purge it by taking a few measurements
   getMeasurement();
   while (true) {
     stepTo(sweepSteps, 0.0, true);
-    delay(500);
-    xCurr = getMeasurement();
-    Serial.printf("X - CURR: %i,  LAST: %i,  ALREADY: %i\n", xCurr, xLast, prevIncreased);
-    if (xCurr >= xLast) {
-      if (prevIncreased) {
-        break;
-      }
-      else {
-        if (timesStepped > slopSteps) { // wait until backlash is taken out to prevent false positives
+    delay(300);
+    if (timesStepped > slopSteps) { // don't start measuring until backlash is taken up
+      xCurr = getMeasurement();
+      Serial.printf("X - CURR: %i,  LAST: %i,  ALREADY: %i\n", xCurr, xLast, prevIncreased);
+      if (xCurr >= xLast) {
+        if (prevIncreased) {
+          break;
+        }
+        else {
           prevIncreased = true;
         }
       }
-    }
-    else {
-      prevIncreased = false;
+      else {
+        prevIncreased = false;
+      }
     }
     timesStepped++;
     if (timesStepped > slopSteps && !backlashed) {
@@ -380,32 +378,34 @@ void newNormalize() {
     xLast = xCurr;
   }
 
+  stepTo(-sweepSteps, 0.0, true); // step to previous X value since that's the actual normal
   prevIncreased = false;
   sweepSteps = 15.0;
   timesStepped = 0;
   backlashed = false;
   // Y normalization
   stepTo(0.0, startSweepSteps, true);
-  delay(1000);
+  delay(250);
   yLast = 10000;
-
   while (true) {
     stepTo(0.0, sweepSteps, true);
-    delay(500);
-    yCurr = getMeasurement();
-    Serial.printf("Y - CURR: %i,  LAST: %i,  ALREADY: %i\n", yCurr, yLast, prevIncreased);
-    if (yCurr >= yLast) {
-      if (prevIncreased) {
-        break;
-      }
-      else {
-        if (timesStepped > slopSteps) {
-          prevIncreased = true;
+    delay(300);
+    if (timesStepped > slopSteps) {
+      yCurr = getMeasurement();
+      Serial.printf("Y - CURR: %i,  LAST: %i,  ALREADY: %i\n", yCurr, yLast, prevIncreased);
+      if (yCurr >= yLast) {
+        if (prevIncreased) {
+          break;
+        }
+        else {
+          if (timesStepped > slopSteps) {
+            prevIncreased = true;
+          }
         }
       }
-    }
-    else {
-      prevIncreased = false;
+      else {
+        prevIncreased = false;
+      }
     }
     timesStepped++;
     if (timesStepped > slopSteps && !backlashed) {
@@ -417,91 +417,12 @@ void newNormalize() {
 
   Ndistance = yLast;
   normalized = true;
+  stepTo(0.0, -sweepSteps, true); // step to previous Y value before setting origin
   totalStepsX = 0;
   totalStepsY = 0;
   Serial.printf("NORMALIZED!\n");
   xStepper.setSpeed(speed);
   yStepper.setSpeed(speed);
-}
-
-void nNormalize() {
-  Serial.printf("NORMALIZING...\n");
-  int xCurr, yCurr, xLast, yLast, xCurrMin, yCurrMin;
-  int sweepSteps = 10;
-
-  // X normalization
-  xCurr = getMeasurement();
-  xLast = xCurr;
-  xCurrMin = 10000;
-  delay(1000);
-  stepTo(-200.0, 0.0, true);
-  delay(1000);
-  for (int i=0; i<20; i++) {
-    stepTo((float)sweepSteps, 0.0, true);
-    delay(1000);
-    
-    xCurr = getMeasurement();
-    Serial.printf("X - curr: %i\n", xCurr);
-    
-  }
-  normalized = true;
-}
-
-void normalize() {
-  Serial.printf("NORMALIZING...\n");
-  display.printf("NORMALIZING...\n");
-  int xCurr, yCurr, xLast, yLast, xCurrMin, yCurrMin;
-  int sweepSteps = 50;
-  int sweepDecr = 5; 
-
-  // X normalization
-  xCurr = getMeasurement();
-  xLast = xCurr;
-  xCurrMin = 10000;
-  delay(1000);
-  while (sweepSteps != 0) {
-    stepTo((float)sweepSteps, 0.0, true);
-    delay(4000);
-    
-    xCurr = getMeasurement();
-    Serial.printf("X - curr: %i, last: %i, min: %i, step: %i\n", xCurr, xLast, xCurrMin, sweepSteps);
-    if (xCurr > xLast) {
-      xCurrMin = xLast;
-      // reverse direction and decrease steps taken
-      sweepSteps = -sweepSteps;
-      sweepSteps > 0 ? sweepSteps -= sweepDecr : sweepSteps += sweepDecr;
-    }
-    else {
-      xCurrMin = xCurr;
-    }
-    xLast = xCurr;
-  }
-  delay(200000);
-  // Y normalization
-  sweepSteps = 50; // reset
-  yCurr = getMeasurement();
-  delay(1000);
-  while (sweepSteps != 0) {
-    Serial.printf("Y - curr: %i, last: %i, min: %i, step: %i\n", yCurr, yLast, yCurrMin, sweepSteps);
-    stepTo(0.0, (float)sweepSteps, true);
-    delay(1000);
-    yLast = yCurr;
-    yCurr = getMeasurement();
-    if (yCurr > yLast) {
-      yCurrMin = yLast;
-      // reverse direction and decrease steps taken
-      sweepSteps = -sweepSteps;
-      sweepSteps > 0 ? sweepSteps += sweepDecr : sweepSteps -= sweepDecr;
-    }
-    else {
-      yCurrMin = yCurr;
-    }
-  }
-  normalized = true;
-  // Zero out global steps taken as starting point for calcs
-  // backlash will matter here...maybe try to eliminate steps and base it on distance(?)
-  totalStepsX = 0;
-  totalStepsY = 0;
 }
 
 
@@ -522,18 +443,20 @@ void manualDrive(bool simpleMode) {
   yStepper.setSpeed(2);
   
   delay(100); // needed to prevent button from triggering immediately(?)
-  while (!nextButton.isClicked()) { drive(); }
-  
+  while (!nextButton.isClicked()) { drive(); } // Drive to BL
   delay(200); // stabilize
-  TLdistance = getMeasurement();
   TLsteps[0] = totalStepsX;
   TLsteps[1] = totalStepsY;
+
+  // DEBUG
+  stepTo(-totalStepsX, -totalStepsY, true);
+  return;
 
   displayInstructions(MANUAL_DRIVE, 1);
 
   while (!nextButton.isClicked()) { drive(); }
-
   delay(200); // stabilize
+
   BRdistance = getMeasurement();
   BRsteps[0] = totalStepsX;
   BRsteps[1] = totalStepsY;
@@ -565,6 +488,7 @@ void drive() {
   // delay(200);
 
   // determine direction and magnitude
+  // sensitivity doesn't work because of how stepTo() works...
   float xMag = 0.0; 
   float yMag = 0.0;
   // X
@@ -593,26 +517,26 @@ void drive() {
 
   // Y 
   if (yStick > sensi[5]) {              // +Y max 
-    yMag = 3.0;
-    yStepped = true;
-  }
-  if (yStick > sensi[4] && !yStepped) { // +Y mid
-    yMag = 2.0;
-    yStepped = true;
-  }
-  if (yStick > sensi[3] && !yStepped) { // +Y min
-    yMag = 1.0;
-  }
-  if (yStick < sensi[0]) {              // -Y max
     yMag = -3.0;
     yStepped = true;
   }
-  if (yStick < sensi[1] && !yStepped) { // -Y mid
+  if (yStick > sensi[4] && !yStepped) { // +Y mid
     yMag = -2.0;
+    yStepped = true;
+  }
+  if (yStick > sensi[3] && !yStepped) { // +Y min
+    yMag = -1.0;
+  }
+  if (yStick < sensi[0]) {              // -Y max
+    yMag = 3.0;
+    yStepped = true;
+  }
+  if (yStick < sensi[1] && !yStepped) { // -Y mid
+    yMag = 2.0;
     xStepped = true;
   }
   if (yStick < sensi[2] && !yStepped) { // -Y min
-    yMag = -1.0;
+    yMag = 1.0;
   }
 
   // Drive
