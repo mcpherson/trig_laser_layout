@@ -261,14 +261,13 @@ void normalize() {
 
   // X normalization
   stepTo(startSweepSteps, 0.0, true);
-  delay(250);
   xLast = 10000; // spoof impossible value to pass the IF
-  getMeasurement(); // VL53L1X often returns a junk value after waking up, so I purge it by taking a few measurements
+  getMeasurement(); // VL53L1X often returns a junk value after waking up, so I purge it by taking a couple measurements
   getMeasurement();
   while (true) {
     stepTo(sweepSteps, 0.0, true);
-    delay(300);
     if (timesStepped > slopSteps) { // don't start measuring until backlash is taken up
+      delay(200); // stabilize 
       xCurr = getMeasurement();
       Serial.printf("X - CURR: %i,  LAST: %i,  ALREADY: %i\n", xCurr, xLast, prevIncreased);
       if (xCurr >= xLast) {
@@ -282,13 +281,14 @@ void normalize() {
       else {
         prevIncreased = false;
       }
+      xLast = xCurr;
     }
     timesStepped++;
     if (timesStepped > slopSteps && !backlashed) {
       backlashed = true;
       sweepSteps = 7;
     }
-    xLast = xCurr;
+    // xLast = xCurr;
   }
 
   stepTo(-sweepSteps, 0.0, true); // step to previous X value since that's the actual normal
@@ -297,13 +297,12 @@ void normalize() {
   timesStepped = 0;
   backlashed = false;
   // Y normalization
-  stepTo(0.0, startSweepSteps, true);
-  delay(250);
+  stepTo(0.0, -startSweepSteps, true);
   yLast = 10000;
   while (true) {
-    stepTo(0.0, sweepSteps, true);
-    delay(300);
+    stepTo(0.0, -sweepSteps, true);
     if (timesStepped > slopSteps) {
+      delay(200); // stabilize
       yCurr = getMeasurement();
       Serial.printf("Y - CURR: %i,  LAST: %i,  ALREADY: %i\n", yCurr, yLast, prevIncreased);
       if (yCurr >= yLast) {
@@ -319,13 +318,14 @@ void normalize() {
       else {
         prevIncreased = false;
       }
+      yLast = yCurr;
     }
     timesStepped++;
     if (timesStepped > slopSteps && !backlashed) {
       backlashed = true;
       sweepSteps = 7;
     }
-    yLast = yCurr;
+    // yLast = yCurr;
   }
 
   Ndistance = yLast;
@@ -351,8 +351,8 @@ void manualDrive() {
   Button nextButton(JOYSTICK_BUTTON, true);
   
   // decrease stepper speed for increased accuracy
-  xStepper.setSpeed(1);
-  yStepper.setSpeed(1);
+  xStepper.setSpeed(2);
+  yStepper.setSpeed(2);
   
   // Bottom left corner
   displayInstructions(MANUAL_DRIVE, 0);
@@ -438,26 +438,26 @@ void drive() {
 
   // Y 
   if (yStick > sensi[5]) {              // +Y max 
-    yMag = -3.0;
-    yStepped = true;
-  }
-  if (yStick > sensi[4] && !yStepped) { // +Y mid
-    yMag = -2.0;
-    yStepped = true;
-  }
-  if (yStick > sensi[3] && !yStepped) { // +Y min
-    yMag = -1.0;
-  }
-  if (yStick < sensi[0]) {              // -Y max
     yMag = 3.0;
     yStepped = true;
   }
-  if (yStick < sensi[1] && !yStepped) { // -Y mid
+  if (yStick > sensi[4] && !yStepped) { // +Y mid
     yMag = 2.0;
+    yStepped = true;
+  }
+  if (yStick > sensi[3] && !yStepped) { // +Y min
+    yMag = 1.0;
+  }
+  if (yStick < sensi[0]) {              // -Y max
+    yMag = -3.0;
+    yStepped = true;
+  }
+  if (yStick < sensi[1] && !yStepped) { // -Y mid
+    yMag = -2.0;
     xStepped = true;
   }
   if (yStick < sensi[2] && !yStepped) { // -Y min
-    yMag = 1.0;
+    yMag = -1.0;
   }
 
   // Drive
@@ -501,7 +501,7 @@ void displayInstructions(Mode mode, uint8_t line) {
     case MANUAL_DRIVE:
       switch (line) {
         case 0: // bottom left
-          display.printf("MANUAL MODE:\nDrive to the exact\n bottom left corner\n(ABOVE BASEBOARD!)\nClick to continue.");
+          display.printf("MANUAL MODE:\nDrive to the exact\nbottom left corner\n(ABOVE BASEBOARD!)\nClick to continue.");
           break;
         case 1: // top left
           display.printf("MANUAL MODE:\nDrive to the exact\ntop left corner\n(BELOW MOLDING!)\nClick to finish.");
@@ -548,8 +548,8 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
   if (xSteps >= 0) { xDir = -1; }
   else             { xDir = 1; }
   int yDir;
-  if (ySteps >= 0) { yDir = -1; }
-  else             { yDir = 1; }
+  if (ySteps >= 0) { yDir = 1; }
+  else             { yDir = -1; }
   
   // find maximum to bound loop
   int xStepsAbs = abs(xSteps);
