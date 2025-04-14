@@ -46,9 +46,6 @@ bool normalized = false;
 bool BLdefined = false;
 bool TLdefined = false;
 bool TRdefined = false;
-bool oriented = false;
-bool orientedX = false;
-bool orientedY = false;
 
 // WALL DIMENSIONS
 // N = normal vector, BL/TL/TR = bottom left/top left/top right corners (defined via manualDrive())
@@ -78,14 +75,6 @@ int measCount = 0;
 int measurements[numMeas];
 int thisDistance;
 
-// MPU6050
-byte accel_x_h, accel_x_l, accel_y_h, accel_y_l, accel_z_h, accel_z_l;
-int16_t accel_x, accel_y, accel_z;
-float x_Gs, y_Gs, z_Gs;
-byte AFS_SEL_value;
-const int AFS_SEL_factor[4] = {16384, 8192, 4096, 2048};
-float pitch, roll;
-
 // CONTROLS
 uint16_t sensi[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity thresholds 
 
@@ -114,16 +103,10 @@ Stepper xStepper(SPR, X_ST_1, X_ST_3, X_ST_2, X_ST_4);
 Stepper yStepper(SPR, Y_ST_1, Y_ST_3, Y_ST_2, Y_ST_4);
 
 void toggleLaser();
-int calcSteps();
 int getMeasurement();
-void getAccel();
-void getPitchAndRoll(float *x, float *y, float *z);
-void orient();
-void normalize();
-void nNormalize();
 void normalize();
 void beginManualDrive();
-void manualDrive(bool simpleMode);
+void manualDrive();
 void drive();
 void setMode(Mode mode);
 void displayInstructions(Mode mode, uint8_t line);
@@ -157,14 +140,6 @@ void setup() {
   // STEPPERS
   xStepper.setSpeed(speed);
   yStepper.setSpeed(speed);
-  
-  // MPU6050
-  Wire.begin();
-  Wire.beginTransmission(0x68);
-  Wire.write(0x6B);
-  Wire.write(0x00); 
-  Wire.endTransmission(true);
-  AFS_SEL_value = 0;
 
   // TIME OF FLIGHT SENSOR (TOFS)
   Wire.begin();
@@ -199,7 +174,7 @@ void setup() {
   // Serial.println(vl53.VL53L1X_GetROI_XY());
   // uint16_t ROIC;
   // Serial.print(F("ROI Center: "));
-  vl53.VL53L1X_SetDistanceMode(1);
+  vl53.VL53L1X_SetDistanceMode(1); // short = 1, long = 2
   // Serial.println(ROIC);
   // Serial.print(F("Intermeasurement (ms): "));
   // Serial.println(vl53.VL53L1X_GetInterMeasurementInMs());
@@ -220,35 +195,23 @@ void setup() {
 
 void loop() { 
   
-  if (isDriving) { manualDrive(false); }
+  if (isDriving) { manualDrive(); }
 
   if (!normalized) { normalize(); } 
 
+  if (BLdefined) {
+    Serial.printf("BLdist: %i, X: %i, Y: %i\n", BLdistance, BLsteps[0], BLsteps[1]);
+  }
 
   if (TLdefined) {
-    Serial.printf("TLdist: %i, TLX: %i, TLY: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
+    Serial.printf("TLdist: %i, X: %i, Y: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
   }
-
-  if (BRdefined) {
-    Serial.printf("BRdist: %i, BRX: %i, BRY: %i\n", BRdistance, BRsteps[0], BRsteps[1]);
+  
+  if (TRdefined) {
+    Serial.printf("TRdist: %i, X: %i, Y: %i\n", TRdistance, TRsteps[0], TRsteps[1]);
   }
+  
 
-  // if (!oriented) {
-  //   getAccel();
-  //   getPitchAndRoll(&x_Gs, &y_Gs, &z_Gs);
-  //   stepTo(0.0, -15.0);
-  //   delay(3000);
-  //   getAccel();
-  //   getPitchAndRoll(&x_Gs, &y_Gs, &z_Gs);
-  //   stepTo(0.0, 15.0);
-  //   delay(3000);
-  //   orient();
-  // }
-  
-  
-  // Serial.println(getMeasurement());
-
-  
 }
 
 
@@ -297,42 +260,6 @@ int getMeasurement() {
   return round(avgDist);
 }
 
-
-void getAccel() {
-  Wire.beginTransmission(0x68);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-  // get the values
-  Wire.requestFrom(0x68, 6, true);
-  // combine accel - shift h bits left by 8, then OR with the l bits to combine
-  accel_x = (Wire.read() << 8 | Wire.read());
-  accel_y = (Wire.read() << 8 | Wire.read());
-  accel_z = (Wire.read() << 8 | Wire.read());
-  // calculate Gs with accel values and the AFS_SEL factor
-  x_Gs = (float)accel_x / AFS_SEL_factor[AFS_SEL_value];
-  y_Gs = (float)accel_y / AFS_SEL_factor[AFS_SEL_value];
-  z_Gs = (float)accel_z / AFS_SEL_factor[AFS_SEL_value];
-}
-
-
-void getPitchAndRoll(float *x, float *y, float *z) {
-  // calculates pitch in degrees
-  // NaN is returned if pitch > 90 or pitch < -90
-  pitch = -asin(*x) * (180.0/M_PI);
-  Serial.printf("PITCH: %0.2f\n", pitch);
-
-  // calculates roll in degrees
-  // flips from 180 to -180 halfway through roll
-  roll = atan2(*y, *z) * (180.0/M_PI);
-  Serial.printf("ROLL:  %0.2f\n", roll);
-}
-
-
-void orient() {
-  // COMPASS? HALL EFFECT?
-  // not even necessary
-
-}
 
 void normalize() {
   xStepper.setSpeed(2);
@@ -430,7 +357,7 @@ void beginManualDrive() { isDriving = true; } // interrupt
 
 // Allows the user to drive the gimbal. 
 // Easiest and most accurate way to find the true corners of a wall with budget parts.
-void manualDrive(bool simpleMode) {
+void manualDrive() {
   Serial.printf("I drive.\n");
   // change joystick click functionality
   detachInterrupt(JOYSTICK_BUTTON);
