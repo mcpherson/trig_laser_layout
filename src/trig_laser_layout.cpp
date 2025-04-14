@@ -341,9 +341,12 @@ void newNormalize() {
   yStepper.setSpeed(2);
   Serial.printf("NORMALIZING...\n");
   int xCurr, yCurr, xLast, yLast;
-  float startSweepSteps = -100.0;
-  float sweepSteps = 15.0;
+  float startSweepSteps = -250.0;
+  float sweepSteps = 16.0;
   bool prevIncreased = false;
+  int timesStepped = 0;
+  int slopSteps = 11;
+  bool backlashed = false;
 
   // X normalization
   stepTo(startSweepSteps, 0.0, true);
@@ -361,16 +364,26 @@ void newNormalize() {
         break;
       }
       else {
-        prevIncreased = true;
+        if (timesStepped > slopSteps) { // wait until backlash is taken out to prevent false positives
+          prevIncreased = true;
+        }
       }
     }
     else {
       prevIncreased = false;
     }
+    timesStepped++;
+    if (timesStepped > slopSteps && !backlashed) {
+      backlashed = true;
+      sweepSteps = 7;
+    }
     xLast = xCurr;
   }
 
   prevIncreased = false;
+  sweepSteps = 15.0;
+  timesStepped = 0;
+  backlashed = false;
   // Y normalization
   stepTo(0.0, startSweepSteps, true);
   delay(1000);
@@ -386,11 +399,18 @@ void newNormalize() {
         break;
       }
       else {
-        prevIncreased = true;
+        if (timesStepped > slopSteps) {
+          prevIncreased = true;
+        }
       }
     }
     else {
       prevIncreased = false;
+    }
+    timesStepped++;
+    if (timesStepped > slopSteps && !backlashed) {
+      backlashed = true;
+      sweepSteps = 7;
     }
     yLast = yCurr;
   }
