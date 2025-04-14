@@ -43,9 +43,6 @@ bool laserToggle = false;
 bool measureToggle = false;
 bool isDriving = false;
 bool normalized = false;
-bool BLdefined = false;
-bool TLdefined = false;
-bool TRdefined = false;
 
 // WALL DIMENSIONS
 // N = normal vector, BL/TL/TR = bottom left/top left/top right corners (defined via manualDrive())
@@ -198,18 +195,6 @@ void loop() {
   if (isDriving) { manualDrive(); }
 
   if (!normalized) { normalize(); } 
-
-  if (BLdefined) {
-    Serial.printf("BLdist: %i, X: %i, Y: %i\n", BLdistance, BLsteps[0], BLsteps[1]);
-  }
-
-  if (TLdefined) {
-    Serial.printf("TLdist: %i, X: %i, Y: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
-  }
-  
-  if (TRdefined) {
-    Serial.printf("TRdist: %i, X: %i, Y: %i\n", TRdistance, TRsteps[0], TRsteps[1]);
-  }
   
 
 }
@@ -265,6 +250,7 @@ void normalize() {
   xStepper.setSpeed(2);
   yStepper.setSpeed(2);
   Serial.printf("NORMALIZING...\n");
+  displayInstructions(NORMALIZE, 0);
   int xCurr, yCurr, xLast, yLast;
   float startSweepSteps = -250.0;
   float sweepSteps = 16.0;
@@ -348,6 +334,7 @@ void normalize() {
   totalStepsX = 0;
   totalStepsY = 0;
   Serial.printf("NORMALIZED!\n");
+  displayInstructions(NORMALIZE, 1);
   xStepper.setSpeed(speed);
   yStepper.setSpeed(speed);
 }
@@ -363,32 +350,39 @@ void manualDrive() {
   detachInterrupt(JOYSTICK_BUTTON);
   Button nextButton(JOYSTICK_BUTTON, true);
   
-  displayInstructions(MANUAL_DRIVE, 0);
-  
   // decrease stepper speed for increased accuracy
-  xStepper.setSpeed(2);
-  yStepper.setSpeed(2);
+  xStepper.setSpeed(1);
+  yStepper.setSpeed(1);
   
-  delay(100); // needed to prevent button from triggering immediately(?)
-  while (!nextButton.isClicked()) { drive(); } // Drive to BL
-  delay(200); // stabilize
+  // Bottom left corner
+  displayInstructions(MANUAL_DRIVE, 0);
+  delay(100); // prevent clickthrough
+  while (!nextButton.isClicked()) { drive(); }
+  delay(100); // prevent clickthrough
+  BLsteps[0] = totalStepsX;
+  BLsteps[1] = totalStepsY;
+  
+  // Top left corner
+  displayInstructions(MANUAL_DRIVE, 1);
+  delay(100); // prevent clickthrough
+  while (!nextButton.isClicked()) { drive(); } 
+  delay(100); // prevent clickthrough
   TLsteps[0] = totalStepsX;
   TLsteps[1] = totalStepsY;
 
+  // Top right corner
+  displayInstructions(MANUAL_DRIVE, 2);
+  delay(100); // prevent clickthrough
+  while (!nextButton.isClicked()) { drive(); } 
+  delay(100); // prevent clickthrough
+  TRsteps[0] = totalStepsX;
+  TRsteps[1] = totalStepsY;
+
   // DEBUG
+  Serial.printf("BLdist: %i, X: %i, Y: %i\n", BLdistance, BLsteps[0], BLsteps[1]);
+  Serial.printf("TLdist: %i, X: %i, Y: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
+  Serial.printf("TRdist: %i, X: %i, Y: %i\n", TRdistance, TRsteps[0], TRsteps[1]);
   stepTo(-totalStepsX, -totalStepsY, true);
-  return;
-
-  displayInstructions(MANUAL_DRIVE, 1);
-
-  while (!nextButton.isClicked()) { drive(); }
-  delay(200); // stabilize
-
-  BRdistance = getMeasurement();
-  BRsteps[0] = totalStepsX;
-  BRsteps[1] = totalStepsY;
-
-  displayInstructions(DEFAULT_MODE, 0);
 
   attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
 
@@ -487,6 +481,9 @@ void displayInstructions(Mode mode, uint8_t line) {
         case 0:
           display.printf("NORMALIZING...\n");
           break;
+        case 1:
+          display.printf("DONE NORMALIZING.\nClick stick to begin.");
+          break;
         default:
           display.printf("NORMALIZING:\nERROR");
           break;
@@ -503,13 +500,16 @@ void displayInstructions(Mode mode, uint8_t line) {
       break;
     case MANUAL_DRIVE:
       switch (line) {
-        case 0:
-          display.printf("MANUAL MODE:\nDrive to the exact\ntop left corner.\nClick to continue.");
+        case 0: // bottom left
+          display.printf("MANUAL MODE:\nDrive to the exact\n bottom left corner\n(ABOVE BASEBOARD!)\nClick to continue.");
           break;
-        case 1: 
-          display.printf("MANUAL MODE:\nDrive to the exact\nbottom right corner.\nClick to finish.");
+        case 1: // top left
+          display.printf("MANUAL MODE:\nDrive to the exact\ntop left corner\n(BELOW MOLDING!)\nClick to finish.");
           break;
-        default:
+        case 2: // top right
+          display.printf("MANUAL MODE:\nDrive to the exact\ntop right corner\n(BELOW MOLDING!)\nClick to finish.");
+          break;
+        default: 
           display.printf("MANUAL MODE:\nERROR");
           break;
       }
@@ -574,14 +574,6 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
 
 
 void calculateWall() {
-  // calculate angles from normal vector to TL/BR.
-  float TLangle = acos(Ndistance / TLdistance) * (180/M_PI);
-  float BRangle = acos(Ndistance / BRdistance) * (180/M_PI);
-  // calculate distance from normal point to TL/BR
-  float NtoTL = sqrt(pow(TLdistance, 2) - pow(Ndistance, 2));
-  float NtoBR = sqrt(pow(BRdistance, 2) - pow(Ndistance, 2));
-  // calculate wall diagonal from known sides
-  float TLtoBR = hypot(NtoTL, NtoBR);
 
 }
 
