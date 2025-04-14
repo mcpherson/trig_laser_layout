@@ -72,16 +72,13 @@ int measCount = 0;
 int measurements[numMeas];
 int thisDistance;
 
-// CONTROLS
-uint16_t sensi[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity thresholds 
-
 // TIMING
 uint32_t lastTime; 
 
 // MODES
 enum Mode {
   NORMALIZE,
-  DEFAULT_MODE,
+  SET_MODE,
   MANUAL_DRIVE,
   FREE_GRID,
   CENTERED_GRID,
@@ -384,18 +381,22 @@ void manualDrive() {
   Serial.printf("TRdist: %i, X: %i, Y: %i\n", TRdistance, TRsteps[0], TRsteps[1]);
   stepTo(-totalStepsX, -totalStepsY, true);
 
-  attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
+  // attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
 
   // reset stepper speed to max when finished
   xStepper.setSpeed(speed);
   yStepper.setSpeed(speed);
 
   isDriving = false;
+
+  setMode();
 }
 
 
 // joystick controls
 void drive() {
+
+  uint16_t sensi[6] = {500, 1250, 1900, 2200, 2850, 3600}; // sensitivity thresholds
 
   // track when x or y steps are taken to skip subsequent sensitivity checks
   bool xStepped = false;
@@ -409,55 +410,46 @@ void drive() {
   // delay(200);
 
   // determine direction and magnitude
-  // sensitivity doesn't work because of how stepTo() works...
   float xMag = 0.0; 
   float yMag = 0.0;
-  // X
-  if (xStick > sensi[5]) {              // +X max 
-    xMag = 3.0;
-    xStepped = true;
-  }
-  if (xStick > sensi[4] && !xStepped) { // +X mid
-    xMag = 2.0;
-    xStepped = true;
-  }
-  if (xStick > sensi[3] && !xStepped) { // +X min
+
+  // X direction
+  if (xStick > sensi[3]) {  // +X
     xMag = 1.0;
   }
-  if (xStick < sensi[0]) {              // -X max
-    xMag = -3.0;
-    xStepped = true;
-  }
-  if (xStick < sensi[1] && !xStepped) { // -X mid
-    xMag = -2.0;
-    xStepped = true;
-  }
-  if (xStick < sensi[2] && !xStepped) { // -X min
+  if (xStick < sensi[2]) {  // -X
     xMag = -1.0;
   }
-
-  // Y 
-  if (yStick > sensi[5]) {              // +Y max 
-    yMag = 3.0;
-    yStepped = true;
-  }
-  if (yStick > sensi[4] && !yStepped) { // +Y mid
-    yMag = 2.0;
-    yStepped = true;
-  }
-  if (yStick > sensi[3] && !yStepped) { // +Y min
-    yMag = 1.0;
-  }
-  if (yStick < sensi[0]) {              // -Y max
-    yMag = -3.0;
-    yStepped = true;
-  }
-  if (yStick < sensi[1] && !yStepped) { // -Y mid
-    yMag = -2.0;
+  // X speed
+  if (xStick > sensi[5] || xStick < sensi[0]) {                // X max 
+    xStepper.setSpeed(4);
     xStepped = true;
   }
-  if (yStick < sensi[2] && !yStepped) { // -Y min
+  if ((xStick > sensi[4] || xStick < sensi[1]) && !xStepped) { // X mid
+    xStepper.setSpeed(2);
+    xStepped = true;
+  }
+  if ((xStick > sensi[3] || xStick < sensi[2]) && !xStepped) { // X min
+    xStepper.setSpeed(1);
+  }
+
+  // Y direction
+  if (yStick > sensi[3]) {  // +Y
+    yMag = 1.0;
+  }
+  if (yStick < sensi[2]) {  // -Y
     yMag = -1.0;
+  }
+  if (yStick > sensi[5] || yStick < sensi[0]) {                // Y max 
+    yStepper.setSpeed(4);
+    yStepped = true;
+  }
+  if ((yStick > sensi[4] || yStick < sensi[1]) && !yStepped) { // Y mid
+    yStepper.setSpeed(2);
+    yStepped = true;
+  }
+  if ((yStick > sensi[3] || yStick < sensi[2]) && !yStepped) { // Y min
+    yStepper.setSpeed(1);
   }
 
   // Drive
@@ -468,6 +460,7 @@ void drive() {
 
 
 void setMode(Mode mode) {
+  displayInstructions(SET_MODE, 0);
 
 }
 
@@ -489,7 +482,7 @@ void displayInstructions(Mode mode, uint8_t line) {
           break;
       }
       break;
-    case DEFAULT_MODE:
+    case SET_MODE:
       switch (line) {
         case 0:
           display.printf("Click stick to begin.\n");
