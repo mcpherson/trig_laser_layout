@@ -51,12 +51,43 @@ bool normalized = false;
 //   int y
 // } Steps;
 
+// #define X 0
+// #define Y 1
+
+// Steps stepperLimit;
+// Steps totalSteps;
+// Steps BLsteps;
+// Steps TLsteps;
+// Steps TRsteps;
+
 int16_t Ndistance;
-int16_t BLdistance, TLdistance, TRdistance;
+// user-defined points
+int16_t BLdistance[2], TLdistance[2], TRdistance[2];
 
 int16_t BLsteps[2];
 int16_t TLsteps[2];  
 int16_t TRsteps[2]; 
+
+float BLtheta[2], TLtheta[2], TRtheta[2];
+
+
+
+// hardcoded for now, will refactor and allocate dynamically when I have time to learn how
+int16_t P0steps[2]; // reference on left edge of wall
+int16_t P1steps[2]; // first real point
+int16_t P2steps[2]; 
+int16_t P3steps[2]; 
+
+float P0theta[2], P1theta[2], P2theta[2], P3theta[2];
+int16_t P0distance[2], P1distance[2], P2distance[2], P3distance[2];
+
+// vectors
+float TLtoBL[2], TLtoTR[2];
+
+
+
+
+
 
 // STEPPER
 int SPR = 2048; // steps per revolution
@@ -109,6 +140,8 @@ void displayInstructions(Mode mode, int8_t line);
 void stepTo(float xSteps, float ySteps, bool stepwise);
 void calculateWall();
 void showPoint();
+float deg_2_rad(float d);
+float rad_2_deg(float r);
 
 
 void setup() {
@@ -191,10 +224,13 @@ void setup() {
 
 void loop() { 
   
-  // if (isDriving) { manualDrive(); }
+  if (isDriving) { manualDrive(); }
 
-  // if (!normalized) { normalize(); } 
-  setMode();
+  if (millis() - lastTime > 10000) {
+    if (!normalized) { normalize(); } 
+    setMode();
+  }
+
   
 
 }
@@ -361,6 +397,10 @@ void manualDrive() {
   delay(100); // prevent clickthrough
   BLsteps[0] = totalStepsX;
   BLsteps[1] = totalStepsY;
+  BLtheta[0] = (float)BLsteps[0] / SPD;
+  BLtheta[1] = (float)BLsteps[1] / SPD;
+  d_x = NORMAL_DIST * tan(deg_2_rad(p->theta_x));
+  d_y = NORMAL_DIST * tan(deg_2_rad(p->theta_y));
   
   // Top left corner
   displayInstructions(MANUAL_DRIVE, 1);
@@ -528,7 +568,7 @@ void freeGridMode() {
     int incr = stickAdjust();
     if ((xOffset == 0 && incr > 0) || xOffset > 0) {
       xOffset += incr;
-      Serial.printf("xOffset: %i cm\n", xOffset);
+      // Serial.printf("xOffset: %i cm\n", xOffset);
     }
   }
   firstLoop = true;
@@ -546,7 +586,7 @@ void freeGridMode() {
     int incr = stickAdjust();
     if ((yOffset == 0 && incr > 0) || yOffset > 0) {
       yOffset += incr;
-      Serial.printf("yOffset: %i cm\n", yOffset);
+      // Serial.printf("yOffset: %i cm\n", yOffset);
     }
   }
   firstLoop = true;
@@ -564,7 +604,7 @@ void freeGridMode() {
     int incr = stickAdjust();
     if ((gridCols == 0 && incr > 0) || gridCols > 0) {
       gridCols += incr;
-      Serial.printf("Columns: %i\n", gridCols);
+      // Serial.printf("Columns: %i\n", gridCols);
     }
   }
   firstLoop = true;
@@ -582,7 +622,7 @@ void freeGridMode() {
     int incr = stickAdjust();
     if ((gridRows == 0 && incr > 0) || gridRows > 0) {
       gridRows += incr;
-      Serial.printf("Rows: %i\n", gridRows);
+      // Serial.printf("Rows: %i\n", gridRows);
     }
   }
   firstLoop = true;
@@ -600,7 +640,7 @@ void freeGridMode() {
     int incr = stickAdjust();
     if ((colGap == 0 && incr > 0) || colGap > 0) {
       colGap += incr;
-      Serial.printf("Column gap: %i cm\n", colGap);
+      // Serial.printf("Column gap: %i cm\n", colGap);
     }
   }
   firstLoop = true;
@@ -618,7 +658,7 @@ void freeGridMode() {
     int incr = stickAdjust();
     if ((rowGap == 0 && incr > 0) || rowGap > 0) {
       rowGap += incr;
-      Serial.printf("Row gap: %i cm\n", rowGap);
+      // Serial.printf("Row gap: %i cm\n", rowGap);
     }
   }
 }
@@ -735,15 +775,6 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
     ySteps = (int)yDeg;
   }
 
-  // Prevent movement outside predefined range (assuming I can roughly center the device on startup using MPU for pitch and compass or Hall sensor for yaw)
-  // if (abs(totalStepsX) + xStepsAbs >= stepperLimitX) {
-  //   Serial.printf("Attempted X overstep from %i to %i.\n", totalStepsX, totalStepsX + xSteps);
-  //   xSteps = 0;
-  // }
-  // if (abs(totalStepsY) + yStepsAbs >= stepperLimitY) {
-  //   Serial.printf("Attempted Y overstep from %i to %i.\n", totalStepsY, totalStepsY + ySteps);
-  //   ySteps = 0;
-  // }
   
   // find direction - positive angle = clockwise (looking at the motor shaft)
   int xDir;
@@ -759,6 +790,18 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
   int max;
   (xStepsAbs > yStepsAbs || xStepsAbs == yStepsAbs) ? max = xStepsAbs : max = yStepsAbs;
   
+  // Prevent movement outside predefined range (assuming I can roughly center the device on startup using MPU for pitch and compass or Hall sensor for yaw)
+  // if (abs(totalStepsX) + xStepsAbs >= stepperLimitX) {
+  //   Serial.printf("Attempted X overstep from %i to %i.\n", totalStepsX, totalStepsX + xSteps);
+  //   xSteps = 0;
+  //   xDir = 0;
+  // }
+  // if (abs(totalStepsY) + yStepsAbs >= stepperLimitY) {
+  //   Serial.printf("Attempted Y overstep from %i to %i.\n", totalStepsY, totalStepsY + ySteps);
+  //   ySteps = 0;
+  //   yDir = 0;
+  // }
+
   // track total steps globally
   totalStepsX += xSteps;
   totalStepsY += ySteps;
@@ -782,4 +825,14 @@ void calculateWall() {
 
 void showPoint() {
 
+}
+
+float deg_2_rad(float d)
+{
+    return d * (M_PI / 180.0);
+}
+
+float rad_2_deg(float r)
+{
+    return (r * 180.0) / M_PI;
 }
