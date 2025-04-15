@@ -102,8 +102,10 @@ void normalize();
 void beginManualDrive();
 void manualDrive();
 void drive();
-void setMode(Mode mode);
-void displayInstructions(Mode mode, uint8_t line);
+void setMode();
+void freeGridMode();
+int8_t stickAdjust();
+void displayInstructions(Mode mode, int8_t line);
 void stepTo(float xSteps, float ySteps, bool stepwise);
 void calculateWall();
 void showPoint();
@@ -189,9 +191,10 @@ void setup() {
 
 void loop() { 
   
-  if (isDriving) { manualDrive(); }
+  // if (isDriving) { manualDrive(); }
 
-  if (!normalized) { normalize(); } 
+  // if (!normalized) { normalize(); } 
+  setMode();
   
 
 }
@@ -258,7 +261,7 @@ void normalize() {
 
   // X normalization
   stepTo(startSweepSteps, 0.0, true);
-  xLast = 10000; // spoof impossible value to pass the IF
+  xLast = 10000; // spoof
   getMeasurement(); // VL53L1X often returns a junk value after waking up, so I purge it by taking a couple measurements
   getMeasurement();
   while (true) {
@@ -459,15 +462,190 @@ void drive() {
 }
 
 
-void setMode(Mode mode) {
-  displayInstructions(SET_MODE, 0);
+void setMode() {
+  Button nextButton(JOYSTICK_BUTTON, true);
+  int8_t modeSel = -1;
+  int modeMax = 1;
+  bool modeChange = false;
+  int xThreshPos = 2250;
+  int xThreshNeg = 1750;
 
+  while (!nextButton.isClicked()) {
+    int xStick = analogRead(JOYSTICK_X);
+    if (xStick > xThreshPos && !modeChange) {
+      if (modeSel < modeMax) {
+        modeSel++;
+      }
+      modeChange = true;
+    }
+    if (xStick < xThreshNeg && !modeChange && modeSel > -1) {
+      if (modeSel > 0) {
+        modeSel--;
+      }
+      modeChange = true;
+    }
+    if (xStick < xThreshPos && xStick > xThreshNeg) {
+      modeChange = false;
+    }
+  
+    displayInstructions(SET_MODE, modeSel);
+
+  }
+
+  switch (modeSel) {
+    case 0: 
+      Serial.printf("Free Grid Mode selected\n");
+      freeGridMode();
+      break;
+    case 1:
+      Serial.printf("Stud Mode selected\n");
+      break;
+    default:
+      break;
+  }
 }
 
 
-void displayInstructions(Mode mode, uint8_t line) {
+void freeGridMode() {
+  Serial.printf("FREE GRID MODE\n");
+  Button nextButton(JOYSTICK_BUTTON, true);
+  int xOffset = 0, yOffset = 0, gridCols = 0, gridRows = 0, colGap = 0, rowGap = 0;
+  int prevVal = 0;
+  bool firstLoop = true; 
+
+  delay(200); // prevent clickthrough
+  
+  while (!nextButton.isClicked()) { // x offset
+    if (prevVal != xOffset || firstLoop) {
+      displayInstructions(FREE_GRID, 0);
+      display.setTextSize(2);
+      display.printf("%i cm", xOffset);
+      display.display();
+      firstLoop = false;
+    }
+
+    prevVal = xOffset;
+    int incr = stickAdjust();
+    if ((xOffset == 0 && incr > 0) || xOffset > 0) {
+      xOffset += incr;
+      Serial.printf("xOffset: %i cm\n", xOffset);
+    }
+  }
+  firstLoop = true;
+
+  while (!nextButton.isClicked()) { // y offset
+    if (prevVal != yOffset || firstLoop) {
+      displayInstructions(FREE_GRID, 1);
+      display.setTextSize(2);
+      display.printf("%i cm", yOffset);
+      display.display();
+      firstLoop = false;
+    }
+
+    prevVal = yOffset;
+    int incr = stickAdjust();
+    if ((yOffset == 0 && incr > 0) || yOffset > 0) {
+      yOffset += incr;
+      Serial.printf("yOffset: %i cm\n", yOffset);
+    }
+  }
+  firstLoop = true;
+
+  while (!nextButton.isClicked()) { // columns
+    if (prevVal != gridCols || firstLoop) {
+      displayInstructions(FREE_GRID, 2);
+      display.setTextSize(2);
+      display.printf("%i columns", gridCols);
+      display.display();
+      firstLoop = false;
+    }
+
+    prevVal = gridCols;
+    int incr = stickAdjust();
+    if ((gridCols == 0 && incr > 0) || gridCols > 0) {
+      gridCols += incr;
+      Serial.printf("Columns: %i\n", gridCols);
+    }
+  }
+  firstLoop = true;
+
+  while (!nextButton.isClicked()) { // rows
+    if (prevVal != gridRows || firstLoop) {
+      displayInstructions(FREE_GRID, 3);
+      display.setTextSize(2);
+      display.printf("%i rows", gridRows);
+      display.display();
+      firstLoop = false;
+    }
+
+    prevVal = gridRows;
+    int incr = stickAdjust();
+    if ((gridRows == 0 && incr > 0) || gridRows > 0) {
+      gridRows += incr;
+      Serial.printf("Rows: %i\n", gridRows);
+    }
+  }
+  firstLoop = true;
+
+  while (!nextButton.isClicked()) { // column gap
+    if (prevVal != colGap || firstLoop) {
+      displayInstructions(FREE_GRID, 4);
+      display.setTextSize(2);
+      display.printf("%i cm", colGap);
+      display.display();
+      firstLoop = false;
+    }
+
+    prevVal = colGap;
+    int incr = stickAdjust();
+    if ((colGap == 0 && incr > 0) || colGap > 0) {
+      colGap += incr;
+      Serial.printf("Column gap: %i cm\n", colGap);
+    }
+  }
+  firstLoop = true;
+
+  while (!nextButton.isClicked()) { // row gap
+    if (prevVal != rowGap || firstLoop) {
+      displayInstructions(FREE_GRID, 5);
+      display.setTextSize(2);
+      display.printf("%i cm", rowGap);
+      display.display();
+      firstLoop = false;
+    }
+
+    prevVal = rowGap;
+    int incr = stickAdjust();
+    if ((rowGap == 0 && incr > 0) || rowGap > 0) {
+      rowGap += incr;
+      Serial.printf("Row gap: %i cm\n", rowGap);
+    }
+  }
+}
+
+
+int8_t stickAdjust() {
+  int xThreshPos = 2250;
+  int xThreshNeg = 1750;
+  while (true) {
+    int xStick = analogRead(JOYSTICK_X);
+    if (xStick > xThreshPos) {
+      return 1;
+    }
+    if (xStick < xThreshNeg) {
+      return -1;
+    }
+    if (xStick < xThreshPos && xStick > xThreshNeg) {
+      return 0;
+    }
+  }
+}
+
+
+void displayInstructions(Mode mode, int8_t line) {
   display.clearDisplay();
   display.setCursor(0,0);
+  display.setTextSize(1);
   switch (mode) {
     case NORMALIZE:
       switch (line) {
@@ -484,8 +662,14 @@ void displayInstructions(Mode mode, uint8_t line) {
       break;
     case SET_MODE:
       switch (line) {
-        case 0:
-          display.printf("Click stick to begin.\n");
+        case -1: // start
+          display.printf("SELECT MODE:\nNavigate with stick\n");
+          break;
+        case 0: // Free grid mode
+          display.printf("FREE GRID MODE:\nDefine a grid of\npoints to display.\nClick stick to begin.");
+          break;
+        case 1: // Stud mode
+          display.printf("STUD MODE:\nClick stick to begin.");
           break;
         default:
           break;
@@ -497,7 +681,7 @@ void displayInstructions(Mode mode, uint8_t line) {
           display.printf("MANUAL MODE:\nDrive to the exact\nbottom left corner\n(ABOVE BASEBOARD!)\nClick to continue.");
           break;
         case 1: // top left
-          display.printf("MANUAL MODE:\nDrive to the exact\ntop left corner\n(BELOW MOLDING!)\nClick to finish.");
+          display.printf("MANUAL MODE:\nDrive to the exact\ntop left corner\n(BELOW MOLDING!)\nClick to continue.");
           break;
         case 2: // top right
           display.printf("MANUAL MODE:\nDrive to the exact\ntop right corner\n(BELOW MOLDING!)\nClick to finish.");
@@ -508,6 +692,31 @@ void displayInstructions(Mode mode, uint8_t line) {
       }
       break;
     case FREE_GRID:
+      switch(line) {
+        case 0:
+          display.printf("Set distance from\nleft edge of wall.\nClick to continue.\n\n");
+          break;
+        case 1:
+          display.printf("Set distance from\ntop edge of wall.\nClick to continue.\n\n");
+          break;
+        case 2:
+          display.printf("Set # of columns.\nClick to continue.\n\n");
+          break;
+        case 3:
+          display.printf("Set # of rows.\nClick to continue.\n\n");
+          break;
+        case 4:
+          display.printf("Set column gap.\nClick to continue.\n\n");
+          break;
+        case 5:
+          display.printf("Set row gap.\nClick to continue.\n\n");
+          break;
+        case 6:
+          display.printf("Displaying point.\nUse stick to\nchange points.\nClick to end.");
+          break;
+        default:
+          break;
+      }
     default:
       break;
   }
