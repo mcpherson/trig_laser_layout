@@ -1,25 +1,29 @@
 # Trig Laser Layout
 
 ## PURPOSE
-This device uses a gimbal-mounted distance sensor to measure a wall and display a user-defined set of points on it with a visible laser. Measuring and laying out points on a wall by hand can be difficult. A person might have to use a stepladder to measure from the ceiling, or they may need to create evenly spaced holes across a wall's entire width. Gravity-based leveling tools like bubble levels and plumb bobs can be inaccurate due to a structure's misalignment. My goal with this project was to create a device that could be placed in front of a wall and calculate points on the wall regardless of the device's orientation relative to the structure. 
+This device uses a gimbal-mounted distance sensor to measure a wall and display a user-defined set of points on it with a visible laser. Measuring and laying out points on a wall by hand can be difficult, and it's something that most of us have struggled with at some point. A person might have to use a stepladder to measure from the ceiling, or they may need to create evenly spaced holes across a wall's entire width. Gravity-based leveling tools like bubble levels and plumb bobs can be inaccurate due to a structure's misalignment. Currently available computerized laser leveling devices are very expensive. My goal with this project was to create a device that could be placed in front of a wall and calculate points on the wall regardless of the device's orientation relative to the structure. 
 
 ## FUNCTIONALITY
-Two components are key to this device's functionality (apart from the Particle Photon 2 microcontroller) - stepper motors and the VL53L1X time of flight distance sensor by ST Microelectronics. The gimbal is driven by two stepper motors (one for each axis). Each step the motors take rotates the gimbal by a known angle, which is one of the keys to the trigonometry used to lay out points. The other is the distance of the normal vector to the wall, which is measured by the VL53.
+Four components are key to this device's functionality (apart from the Particle Photon 2 microcontroller) - stepper motors, a 2-axis analog joystick, an OLED display, and the VL53L1X time of flight distance sensor by ST Microelectronics. The gimbal is driven by two stepper motors (one for each axis). Each step the motors take rotates the gimbal by a known angle, which is one of the keys to the trigonometry used to lay out points. The other is the distance of the normal vector to the wall, which is measured by the VL53. The joystick allows a user to drive the gimbal to the corners of the wall, eliminating a planned corner detection method that's impossible with the level of accuracy inherent to the project's components. Instructions are displayed on the OLED display during operation. 
 
 ### VL53L1X time of flight sensor
-This sensor uses a principle called "time of flight" (ToF) that measures the time it takes photons to be emitted, reflected, and detected. 
+This sensor uses a principle called "time of flight" (ToF) that measures the time it takes photons to be emitted, reflected, and detected. The receiver has a configurable field of view (from the default 27° down to 15° via interaction with the API). It provides fairly accurate point distance measurements (within ~5cm of error at the max range of the sensor, about 4 meters). It communicates via I2C, allowing for seamless integration into IoT devices. Its low cost and small footprint make it ideal for lightweight applications. 
 
 ### 28BYJ-48 stepper motors
+The low-cost stepper motors used in this project have 32 internal positions. To reduce the angular rotation per step, a 1/64 gear ratio is built in. 2048 steps are needed to complete a full revolution, meaning that each step rotates the motor by about 0.176°. This is all fairly accurate for this application. However, these motors had an issue that caused significant issues for this project (discussed below).
+
+### 2-axis analog joystick
+These joysticks are commonly found as thumb controls in game console controllers. I mounted mine inside a 3D-printed housing designed by Chet Johnston ([available here on Thingiverse](https://www.thingiverse.com/thing:700346) - many thanks to Chet for the great design!). The joystick contains a push button and 2 potentiometers (one for each axis) that return analog values from 0-4095 depending on which side of their range of motion they're on. The joystick is the only control for this device. It allows a user to manually drive the gimbal, and clicking the stick allows the user to proceed through the program flow. I also wrote code to allow a user to select and enter values 
 
 ## LIMITATIONS AND POTENTIAL SOLUTIONS
 ### Stepper motor slop
-The low-cost stepper motors used in this project have 32 internal positions. To reduce the angular rotation per step, a 1/64 gear ratio is built in. 2048 steps are needed to complete a full revolution, meaning that each step rotates the motor by about 0.176 degrees. This is all fairly accurate for this application. However, small spaces between the teeth of the gears result in a loss of motion when the rotation direction is changed. This is known as backlash, play, or slop. 
+Small spaces between the teeth of the gears result in a loss of motion when the rotation direction is changed. This is known as backlash, play, or slop. 
 
 The motors I used have normal slop, which I accounted for using a rubber band to pull the X-axis in one direction. For the Y-axis, the weight of the wires hanging from the gimbal generally kept the Y-axis pulled upward. 
 
-However, there is a second "slop", or dead zone, in these motors, often happening 20 degrees or more after the motor direction changes. This dead zone may be delayed due to precession in the gearing system. The normal slop wasn't much of an issue, but the dead zone creates significant issues for this device. There are many methods for dealing with slop, but most assume that the slop will be taken up immediately. The fact that it's taken up at different points in my motors' motion makes the normalization process described above difficult. 
+However, there is a second "slop", or dead zone, in these motors, often happening 20° or more after the motor direction changes. This dead zone may be delayed due to precession in the gearing system. The normal slop wasn't much of an issue, but the dead zone creates significant issues for this device. There are many methods for dealing with slop, but most assume that the slop will be taken up immediately. The fact that it's taken up at different points in my motors' motion makes the normalization process described above difficult. 
 
-My strategy to deal with the dead zone while normalizing is to step the motors to about 45 degrees from their starting position to ensure that the dead zone is taken up in that direction. Then, the motors change direction step back toward the anticipated normal location to take up the dead zone in that direction prior to the normalization measurements. This was not foolproof - it worked one day, but after more testing the next day, the dead zone seemed to have moved into the range covered by the normalization measurements, giving false positives when checking for different distances.
+My strategy to deal with the dead zone while normalizing is to step the motors to about 45° from their starting position to ensure that the dead zone is taken up in that direction. Then, the motors change direction step back toward the anticipated normal location to take up the dead zone in that direction prior to the normalization measurements. This was not foolproof - it worked one day, but after more testing the next day, the dead zone seemed to have moved into the range covered by the normalization measurements, giving false positives when checking for different distances.
 
 This is also problematic for accurate layout. Currently, I don't have many ways of dealing with this. The range of motion of the device is limited (explained below), meaning that overrotation to take up the dead zone is not always an option when displaying points that are close to the edge of the wall. I have accepted that this is a quirk of the motors I used for the device and is simply something I had to work around during the brief time I had to complete the project. 
 
@@ -41,18 +45,23 @@ I mounted the visible laser with set screws in a barrel that hung below the sens
 ### 3D projection
 This was my first time working with a gimbal, and it was the first time I touched trig since high school. In my mind's eye, just a few known values would be necessary to fully describe the wall relative to the sensor. Unfortunately, this wasn't the case. The gimbal behaves normally when close to the normal vector, but as it gets further away, the tilt of the wall relative to the gimbal's point of view becomes apparent. When the laser is driven straight across the X-axis at the top of the wall, the line described is a conic section. As a result, calculated points were also skewed relative to the wall's tilt. 
 
-To get a truly straight line (both physically and in calculations), 3D projection/transformation is required. This is beyond my skills (for now). I discovered this issue late in the process of designing and building this project, so I was unable to fully account for it. 
-
-
-
+To get a truly straight line (both physically and in calculations), 3D projection/transformation between the sensor coordinates and wall coordinates is required. This is beyond my skills (for now). I discovered this issue late in the process of designing and building this project, so I was unable to fully account for it. I was able to get a decent result by mapping out points close to the normal vector, which proves that I'm at least able to calculate points relative to the corners of the wall. 
 
 
 ## FUTURE IMPROVEMENTS
+- Correct 3D projection
+  - The project would actually work very well (considering all of the other challenges) if I figured this out.
 - Better components
-  - Better stepper motors will back
-- Make it self-orienting 
+  - Better stepper motors
+    - Removing the mid-range dead zone would greatly improve functionality
+  - Better distance sensor (e.g. LIDAR)
+    - With a smaller margin of error, accurately measuring the normal would be easier
+    - I could also use improved accuracy to get point measurements, entirely eliminating the need for manual drive
+  - Slip rings would eliminate wire drag and allow unrestrained motion
+- Make it self-orienting - several possible methods:
   - Use a Hall sensor to detect the gimbal position
-  - 
+  - Use a gyroscope to measure pitch to level out the Y-axis
+  - Use EEPROM to store and return to a set of known steps (from the last position it was in before being switched off)
 - More modes
   - Stud mode: find one stud, drive to it, and display all other studs with a laser line diode
   - Edge detection
