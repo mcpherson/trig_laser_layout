@@ -38,6 +38,10 @@ const int Y_ST_4 = D4;
 const int IRQ_PIN = D13;
 const int XSHUT_PIN = D14;
 
+// point array readability
+const int X = 0;
+const int Y = 1;
+
 // STATES
 bool laserToggle = false;
 bool measureToggle = false;
@@ -51,9 +55,6 @@ bool normalized = false;
 //   int y
 // } Steps;
 
-// #define X 0
-// #define Y 1
-
 // Steps stepperLimit;
 // Steps totalSteps;
 // Steps BLsteps;
@@ -61,7 +62,7 @@ bool normalized = false;
 // Steps TRsteps;
 
 int16_t Ndistance;
-// user-defined points
+// wall corner points
 int16_t BLdistance[2], TLdistance[2], TRdistance[2];
 
 int16_t BLsteps[2];
@@ -69,9 +70,10 @@ int16_t TLsteps[2];
 int16_t TRsteps[2]; 
 
 float BLtheta[2], TLtheta[2], TRtheta[2];
+int16_t wallWidth, wallHeight;
 
 
-
+// user-defined points
 // hardcoded for now, will refactor and allocate dynamically when I have time to learn how
 int16_t P0steps[2]; // reference on left edge of wall
 int16_t P1steps[2]; // first real point
@@ -82,7 +84,8 @@ float P0theta[2], P1theta[2], P2theta[2], P3theta[2];
 int16_t P0distance[2], P1distance[2], P2distance[2], P3distance[2];
 
 // vectors
-float TLtoBL[2], TLtoTR[2];
+int16_t TLtoBLsteps[2], TLtoTRsteps[2];
+float TLtoBLnorm[2], TLtoTRnorm[2];
 
 
 
@@ -137,11 +140,13 @@ void setMode();
 void freeGridMode();
 int8_t stickAdjust();
 void displayInstructions(Mode mode, int8_t line);
+void stepToFrom(int xStepsTo, int yStepsTo, int xStepsFrom, int yStepsFrom);
 void stepTo(float xSteps, float ySteps, bool stepwise);
 void calculateWall();
-void showPoint();
-float deg_2_rad(float d);
-float rad_2_deg(float r);
+void calculateLayout(int wallOffset, int ceilOffset, int cols, int rows, int colGap, int rowGap);
+void showPoints();
+float degToRad(float d);
+float radToDeg(float r);
 
 
 void setup() {
@@ -224,13 +229,12 @@ void setup() {
 
 void loop() { 
   
-  if (isDriving) { manualDrive(); }
+  if (isDriving) manualDrive(); 
 
-  if (millis() - lastTime > 10000) {
-    if (!normalized) { normalize(); } 
-    setMode();
-  }
+if (millis() - lastTime > 5000) {
 
+  if (!normalized) normalize(); 
+}
   
 
 }
@@ -369,7 +373,7 @@ void normalize() {
   stepTo(0.0, -sweepSteps, true); // step to previous Y value before setting origin
   totalStepsX = 0;
   totalStepsY = 0;
-  Serial.printf("NORMALIZED!\n");
+  Serial.printf("NORMALIZED! %imm\n", Ndistance);
   displayInstructions(NORMALIZE, 1);
   xStepper.setSpeed(speed);
   yStepper.setSpeed(speed);
@@ -395,33 +399,44 @@ void manualDrive() {
   delay(100); // prevent clickthrough
   while (!nextButton.isClicked()) { drive(); }
   delay(100); // prevent clickthrough
-  BLsteps[0] = totalStepsX;
-  BLsteps[1] = totalStepsY;
-  BLtheta[0] = (float)BLsteps[0] / SPD;
-  BLtheta[1] = (float)BLsteps[1] / SPD;
-  d_x = NORMAL_DIST * tan(deg_2_rad(p->theta_x));
-  d_y = NORMAL_DIST * tan(deg_2_rad(p->theta_y));
+  BLsteps[X] = totalStepsX;
+  BLsteps[Y] = totalStepsY;
+  BLtheta[X] = (float)BLsteps[X] / SPD;
+  BLtheta[Y] = (float)BLsteps[Y] / SPD;
+  BLdistance[X] = Ndistance * tan(degToRad(BLtheta[X]));
+  BLdistance[Y] = Ndistance * tan(degToRad(BLtheta[Y]));
   
   // Top left corner
   displayInstructions(MANUAL_DRIVE, 1);
   delay(100); // prevent clickthrough
   while (!nextButton.isClicked()) { drive(); } 
   delay(100); // prevent clickthrough
-  TLsteps[0] = totalStepsX;
-  TLsteps[1] = totalStepsY;
+  TLsteps[X] = totalStepsX;
+  TLsteps[Y] = totalStepsY;
+  TLtheta[X] = (float)TLsteps[X] / SPD;
+  TLtheta[Y] = (float)TLsteps[Y] / SPD;
+  TLdistance[X] = Ndistance * tan(degToRad(TLtheta[X]));
+  TLdistance[Y] = Ndistance * tan(degToRad(TLtheta[Y]));
 
   // Top right corner
   displayInstructions(MANUAL_DRIVE, 2);
   delay(100); // prevent clickthrough
   while (!nextButton.isClicked()) { drive(); } 
   delay(100); // prevent clickthrough
-  TRsteps[0] = totalStepsX;
-  TRsteps[1] = totalStepsY;
+  TRsteps[X] = totalStepsX;
+  TRsteps[Y] = totalStepsY;
+  TRtheta[X] = (float)TRsteps[X] / SPD;
+  TRtheta[Y] = (float)TRsteps[Y] / SPD;
+  TRdistance[X] = Ndistance * tan(degToRad(TRtheta[X]));
+  TRdistance[Y] = Ndistance * tan(degToRad(TRtheta[Y]));
 
   // DEBUG
-  Serial.printf("BLdist: %i, X: %i, Y: %i\n", BLdistance, BLsteps[0], BLsteps[1]);
-  Serial.printf("TLdist: %i, X: %i, Y: %i\n", TLdistance, TLsteps[0], TLsteps[1]);
-  Serial.printf("TRdist: %i, X: %i, Y: %i\n", TRdistance, TRsteps[0], TRsteps[1]);
+  Serial.printf("BLdX: %i, BLdY: %i, X: %i, Y: %i\n", BLdistance[X], BLdistance[Y], BLsteps[X], BLsteps[Y]);
+  Serial.printf("BLthetaX: %0.3f, BLthetaY: %0.3f\n", BLtheta[X], BLtheta[Y]);
+  Serial.printf("TLdX: %i, TLdY: %i, X: %i, Y: %i\n", TLdistance[X], TLdistance[Y], TLsteps[X], TLsteps[Y]);
+  Serial.printf("TLthetaX: %0.3f, TLthetaY: %0.3f\n", TLtheta[X], TLtheta[Y]);
+  Serial.printf("TRdX: %i, TRdY: %i, X: %i, Y: %i\n", TRdistance[X], TRdistance[Y], TRsteps[X], TRsteps[Y]);
+  Serial.printf("TRthetaX: %0.3f, TRthetaY: %0.3f\n", TRtheta[X], TRtheta[Y]);
   stepTo(-totalStepsX, -totalStepsY, true);
 
   // attachInterrupt(JOYSTICK_BUTTON, beginManualDrive, FALLING);
@@ -432,6 +447,7 @@ void manualDrive() {
 
   isDriving = false;
 
+  calculateWall();
   setMode();
 }
 
@@ -465,7 +481,7 @@ void drive() {
   }
   // X speed
   if (xStick > sensi[5] || xStick < sensi[0]) {                // X max 
-    xStepper.setSpeed(4);
+    xStepper.setSpeed(2);
     xStepped = true;
   }
   if ((xStick > sensi[4] || xStick < sensi[1]) && !xStepped) { // X mid
@@ -473,7 +489,7 @@ void drive() {
     xStepped = true;
   }
   if ((xStick > sensi[3] || xStick < sensi[2]) && !xStepped) { // X min
-    xStepper.setSpeed(1);
+    xStepper.setSpeed(2);
   }
 
   // Y direction
@@ -571,6 +587,7 @@ void freeGridMode() {
       // Serial.printf("xOffset: %i cm\n", xOffset);
     }
   }
+  xOffset *= 10; // convert to mm
   firstLoop = true;
 
   while (!nextButton.isClicked()) { // y offset
@@ -589,6 +606,7 @@ void freeGridMode() {
       // Serial.printf("yOffset: %i cm\n", yOffset);
     }
   }
+  yOffset *= 10; // convert to mm
   firstLoop = true;
 
   while (!nextButton.isClicked()) { // columns
@@ -643,6 +661,7 @@ void freeGridMode() {
       // Serial.printf("Column gap: %i cm\n", colGap);
     }
   }
+  colGap *= 10; // convert to mm
   firstLoop = true;
 
   while (!nextButton.isClicked()) { // row gap
@@ -661,6 +680,8 @@ void freeGridMode() {
       // Serial.printf("Row gap: %i cm\n", rowGap);
     }
   }
+  rowGap *= 10; // convert to mm
+  calculateLayout(xOffset, yOffset, gridCols, gridRows, colGap, rowGap);
 }
 
 
@@ -764,6 +785,12 @@ void displayInstructions(Mode mode, int8_t line) {
 }
 
 
+void stepToFrom(int xStepsTo, int yStepsTo, int xStepsFrom, int yStepsFrom) {
+  stepTo((float)(xStepsTo - xStepsFrom), (float)(yStepsTo - yStepsFrom), true);
+}
+
+
+
 void stepTo(float xDeg, float yDeg, bool stepwise) {
   int xSteps, ySteps;
   if (!stepwise) { // convert degrees to steps
@@ -813,26 +840,138 @@ void stepTo(float xDeg, float yDeg, bool stepwise) {
   }
   
   // DEBUG
-  Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
+  // Serial.printf("Total steps X: %i, Total steps Y: %i\n", totalStepsX, totalStepsY);
   // Serial.printf("xSteps: %i, ySteps: %i, max: %i, xDir: %i, yDir: %i\n", xSteps, ySteps, max, xDir, yDir);
 }
 
 
 void calculateWall() {
 
+  // vector described by left wall points
+  TLtoBLsteps[X] = BLsteps[X] - TLsteps[X];
+  TLtoBLsteps[Y] = BLsteps[Y] - TLsteps[Y];
+  float magnitude = sqrt(pow(TLtoBLsteps[X], 2) + pow(TLtoBLsteps[Y], 2));
+  if (magnitude == 0) {
+    Serial.printf("0 magnitude error");
+    return;
+  }
+  TLtoBLnorm[X] = TLtoBLsteps[X] / magnitude;
+  TLtoBLnorm[Y] = TLtoBLsteps[Y] / magnitude;
+
+  // vector described by ceiling points
+  TLtoTRsteps[X] = TRsteps[X] - TLsteps[X];
+  TLtoTRsteps[Y] = TRsteps[Y] - TLsteps[Y];
+  magnitude = sqrt(pow(TLtoTRsteps[X], 2) + pow(TLtoTRsteps[Y], 2));
+  if (magnitude == 0) {
+    Serial.printf("0 magnitude error");
+    return;
+  }
+  TLtoTRnorm[X] = TLtoTRsteps[X] / magnitude;
+  TLtoTRnorm[Y] = TLtoTRsteps[Y] / magnitude;
+
+  // calculate wall dimensions in mm
+  wallHeight = sqrt(pow(TLdistance[X] - BLdistance[X], 2) + pow(TLdistance[Y] - BLdistance[Y], 2)); 
+  wallWidth = sqrt(pow(TRdistance[X] - TLdistance[X], 2) + pow(TRdistance[Y] - TLdistance[Y], 2)); 
+
+  Serial.printf("TLtoBLnormX: %0.3f, TLtoBLnormY: %0.3f\n", TLtoBLnorm[X], TLtoBLnorm[Y]);
+  Serial.printf("TLtoTRnormX: %0.3f, TLtoTRnormY: %0.3f\n", TLtoTRnorm[X], TLtoTRnorm[Y]);
+  Serial.printf("Width: %i, Height: %i\n", wallWidth, wallHeight);
+
+}
+
+void calculateLayout(int wallOffset, int ceilOffset, int cols, int rows, int colGap, int rowGap) {
+
+  // eventually this will be dynamic. Only one row of three points is calculated currently for demonstration purposes.
+
+  // Wall point calcs: steps -> angle -> dist, User point calcs: dist -> angle -> steps
+  // from TL, along TLtoBL to P0 (yOffset)
+  P0distance[X] = TLdistance[X] + (TLtoBLnorm[X] * ceilOffset);
+  P0distance[Y] = TLdistance[Y] + (TLtoBLnorm[Y] * ceilOffset);
+  P0theta[X] = radToDeg(atan((float)P0distance[X] / Ndistance));
+  P0theta[Y] = radToDeg(atan((float)P0distance[Y] / Ndistance));
+  P0steps[X] = P0theta[X] * SPD;
+  P0steps[Y] = P0theta[Y] * SPD;
+
+  // from P0, along TLtoTR to P1 (xOffset)
+  P1distance[X] = P0distance[X] + (TLtoTRnorm[X] * wallOffset);
+  P1distance[Y] = P0distance[Y] + (TLtoTRnorm[Y] * wallOffset);
+  P1theta[X] = radToDeg(atan((float)P1distance[X] / Ndistance));
+  P1theta[Y] = radToDeg(atan((float)P1distance[Y] / Ndistance));
+  P1steps[X] = P1theta[X] * SPD;
+  P1steps[Y] = P1theta[Y] * SPD;
+
+  // from P1, along TLtoTR to P2 (colGap) 
+  P2distance[X] = P1distance[X] + (TLtoTRnorm[X] * colGap);
+  P2distance[Y] = P1distance[Y] + (TLtoTRnorm[Y] * colGap);
+  P2theta[X] = radToDeg(atan((float)P2distance[X] / Ndistance));
+  P2theta[Y] = radToDeg(atan((float)P2distance[Y] / Ndistance));
+  P2steps[X] = P2theta[X] * SPD;
+  P2steps[Y] = P2theta[Y] * SPD;
+
+  // from P2, along TLtoTR to P3 (colGap) 
+  P3distance[X] = P2distance[X] + (TLtoTRnorm[X] * colGap);
+  P3distance[Y] = P2distance[Y] + (TLtoTRnorm[Y] * colGap);
+  P3theta[X] = radToDeg(atan((float)P3distance[X] / Ndistance));
+  P3theta[Y] = radToDeg(atan((float)P3distance[Y] / Ndistance));
+  P3steps[X] = P3theta[X] * SPD;
+  P3steps[Y] = P3theta[Y] * SPD;
+
+  Serial.printf("P0dX: %i, P0dY: %i\n", P0distance[X], P0distance[Y]);
+  Serial.printf("P1dX: %i, P1dY: %i\n", P1distance[X], P1distance[Y]);
+  Serial.printf("P2dX: %i, P2dY: %i\n", P2distance[X], P2distance[Y]);
+  Serial.printf("P3dX: %i, P3dY: %i\n", P3distance[X], P3distance[Y]);
+  Serial.printf("===============\n");
+  Serial.printf("P0stepsX: %i, P0stepsY: %i\n", P0steps[X], P0steps[Y]);
+  Serial.printf("P1stepsX: %i, P1stepsY: %i\n", P1steps[X], P1steps[Y]);
+  Serial.printf("P2stepsX: %i, P2stepsY: %i\n", P2steps[X], P2steps[Y]);
+  Serial.printf("P3stepsX: %i, P3stepsY: %i\n", P3steps[X], P3steps[Y]);
+
+  showPoints();
+
 }
 
 
-void showPoint() {
+void showPoints() {
+  Button nextButton(JOYSTICK_BUTTON, true);
 
+  // eventually this will be dynamic. Only one row of three points is calculated currently for demonstration purposes.
+
+  stepTo((float)P0steps[X], (float)P0steps[Y], true);
+  while (true) {
+    if (nextButton.isClicked()) {
+      break;
+    }
+  }
+  
+  stepToFrom(P1steps[X], P1steps[Y], P0steps[X], P0steps[Y]);
+  while (true) {
+    if (nextButton.isClicked()) {
+      break;
+    }
+  }
+
+  stepToFrom(P2steps[X], P2steps[Y], P1steps[X], P1steps[Y]);
+  while (true) {
+    if (nextButton.isClicked()) {
+      break;
+    }
+  }
+
+  stepToFrom(P3steps[X], P3steps[Y], P2steps[X], P2steps[Y]);
+  while (true) {
+    if (nextButton.isClicked()) {
+      break;
+    }
+  }
+  // return to origin
+  stepTo((float)-P3steps[X], (float)-P3steps[Y], true);
+  
 }
 
-float deg_2_rad(float d)
-{
+float degToRad(float d) {
     return d * (M_PI / 180.0);
 }
 
-float rad_2_deg(float r)
-{
+float radToDeg(float r) {
     return (r * 180.0) / M_PI;
 }
