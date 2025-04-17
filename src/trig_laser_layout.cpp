@@ -38,7 +38,7 @@ const int Y_ST_4 = D4;
 const int IRQ_PIN = D13;
 const int XSHUT_PIN = D14;
 
-// point array readability
+// X/Y array readability
 const int X = 0;
 const int Y = 1;
 
@@ -48,8 +48,6 @@ bool measureToggle = false;
 bool isDriving = false;
 bool normalized = false;
 
-// WALL DIMENSIONS
-// N = normal vector, BL/TL/TR = bottom left/top left/top right corners (defined via manualDrive())
 // typedef struct {
 //   int x,
 //   int y
@@ -60,7 +58,9 @@ bool normalized = false;
 // Steps BLsteps;
 // Steps TLsteps;
 // Steps TRsteps;
-
+  
+// WALL DIMENSIONS
+// N = normal vector, BL/TL/TR = bottom left/top left/top right corners (defined via manualDrive())
 int16_t Ndistance;
 // wall corner points
 int16_t BLdistance[2], TLdistance[2], TRdistance[2];
@@ -71,7 +71,6 @@ int16_t TRsteps[2];
 
 float BLtheta[2], TLtheta[2], TRtheta[2];
 int16_t wallWidth, wallHeight;
-
 
 // user-defined points
 // hardcoded for now, will refactor and allocate dynamically when I have time to learn how
@@ -86,11 +85,6 @@ int16_t P0distance[2], P1distance[2], P2distance[2], P3distance[2];
 // vectors
 int16_t TLtoBLsteps[2], TLtoTRsteps[2];
 float TLtoBLnorm[2], TLtoTRnorm[2];
-
-
-
-
-
 
 // STEPPER
 int SPR = 2048; // steps per revolution
@@ -231,11 +225,10 @@ void loop() {
   
   if (isDriving) manualDrive(); 
 
-if (millis() - lastTime > 5000) {
-
-  if (!normalized) normalize(); 
-}
-  
+  // brief pause after startup to allow manual adjustment for bad shutdown position
+  if (millis() - lastTime > 5000) { 
+    if (!normalized) normalize(); 
+  }
 
 }
 
@@ -481,7 +474,7 @@ void drive() {
   }
   // X speed
   if (xStick > sensi[5] || xStick < sensi[0]) {                // X max 
-    xStepper.setSpeed(2);
+    xStepper.setSpeed(4);
     xStepped = true;
   }
   if ((xStick > sensi[4] || xStick < sensi[1]) && !xStepped) { // X mid
@@ -489,7 +482,7 @@ void drive() {
     xStepped = true;
   }
   if ((xStick > sensi[3] || xStick < sensi[2]) && !xStepped) { // X min
-    xStepper.setSpeed(2);
+    xStepper.setSpeed(1);
   }
 
   // Y direction
